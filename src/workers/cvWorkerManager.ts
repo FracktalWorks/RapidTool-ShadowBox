@@ -66,12 +66,12 @@ async function init(): Promise<void> {
   });
 }
 
-async function request<T>(type: string, payload: unknown): Promise<T> {
+async function request<T>(type: string, payload: unknown, transfer: Transferable[] = []): Promise<T> {
   await init();
   return new Promise((resolve, reject) => {
     const id = `${type}-${++reqId}`;
     pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
-    worker!.postMessage({ id, type, payload });
+    worker!.postMessage({ id, type, payload }, transfer);
     setTimeout(() => {
       if (pending.has(id)) { pending.delete(id); reject(new Error('Timeout')); }
     }, 60000);
@@ -217,13 +217,19 @@ export async function contourFromMask(
  * the SAME OpenCV gates as classical detection (hole-fill, area/solidity/aspect,
  * RDP). One ToolTracingResult per connected tool — points in the mask's own
  * coordinate space (the caller maps them back to full-image coords).
+ *
+ * When `rgba` (the SAME crop the mask was computed on, width×height) is supplied,
+ * the worker GrabCut-refines the mask boundary to the image's real edges before
+ * tracing — sharper outlines for SOD-alone + exports. Both buffers are transferred.
  */
 export async function traceMask(
   mask: ArrayBuffer,
   width: number,
   height: number,
+  rgba?: ArrayBuffer,
 ): Promise<ToolTracingResult[]> {
-  return request<ToolTracingResult[]>('traceMask', { mask, width, height });
+  const transfer = rgba ? [mask, rgba] : [mask];
+  return request<ToolTracingResult[]>('traceMask', { mask, width, height, rgba }, transfer);
 }
 
 export interface ToolProposal {

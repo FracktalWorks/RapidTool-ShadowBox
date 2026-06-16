@@ -105,7 +105,11 @@ export async function sodDetect(
   );
 
   // Mask → per-tool contours (same gates as classical), in crop coordinates.
-  const results = await traceMask(seg.mask, seg.width, seg.height);
+  // The first crop was transferred to the SOD worker (detached), so re-crop the
+  // intact full image to hand traceMask the SAME pixels the mask was computed on
+  // — it GrabCut-refines the mask boundary to the real tool edges before tracing.
+  const refine = cropToPaper(img, paperCorners);
+  const results = await traceMask(seg.mask, seg.width, seg.height, refine.crop.buffer);
 
   // Map crop coords → full-image coords.
   return results.map((r) => ({

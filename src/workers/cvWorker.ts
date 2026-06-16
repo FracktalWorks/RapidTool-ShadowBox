@@ -889,14 +889,78 @@ function traceAllTools(imageData: ImageData, paperCorners?: PaperCorners): Trace
   return results;
 }
 
+// Boundary refinement: snap a soft/serrated model mask to the image's real edges
+// via GrabCut seeded from the mask itself — eroded core = definite FG, outside the
+// dilated band = definite BG, the band in between = let graph-cut decide against
+// the colour gradient. This is the precision lever for SOD-alone tracing (and it
+// sharpens SAM/union edges + the export). Returns a NEW full-res binary mask;
+// falls back to a clone of the input on ANY failure so it can never break detection.
+const REFINE_MAX_DIM = 1024;
+function refineMaskToEdges(mask: any, imageData: ImageData): any {
+  let full: any = null, imgS: any = null, maskS: any = null, rgb: any = null;
+  let eroded: any = null, dilated: any = null, ker: any = null, gc: any = null;
+  let bgd: any = null, fgd: any = null, ones: any = null, fg: any = null;
+  try {
+    full = cv.matFromImageData(imageData);
+    const scale = Math.min(1, REFINE_MAX_DIM / Math.max(full.cols, full.rows));
+    const dw = Math.max(1, Math.round(full.cols * scale)), dh = Math.max(1, Math.round(full.rows * scale));
+
+    imgS = new cv.Mat();
+    if (scale < 1) cv.resize(full, imgS, new cv.Size(dw, dh), 0, 0, cv.INTER_AREA);
+    else full.copyTo(imgS);
+    maskS = new cv.Mat();
+    if (scale < 1) cv.resize(mask, maskS, new cv.Size(dw, dh), 0, 0, cv.INTER_NEAREST);
+    else mask.copyTo(maskS);
+
+    rgb = new cv.Mat();
+    cv.cvtColor(imgS, rgb, cv.COLOR_RGBA2RGB);
+
+    // Uncertain band ~1% of the image; erode→definite FG core, dilate→search room.
+    const band = Math.max(3, Math.round(0.012 * Math.min(dw, dh)));
+    ker = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(band, band));
+    eroded = new cv.Mat(); cv.erode(maskS, eroded, ker);
+    dilated = new cv.Mat(); cv.dilate(maskS, dilated, ker);
+
+    // Need a definite FG core AND background outside, or GrabCut has no models.
+    if (cv.countNonZero(eroded) < 50 || cv.countNonZero(dilated) > 0.95 * dw * dh) {
+      throw new Error('mask not suitable for refine (FG core/BG too small)');
+    }
+
+    const GC_BGD = 0, GC_FGD = 1, GC_PR_FGD = 3;
+    gc = new cv.Mat(dh, dw, cv.CV_8UC1, new cv.Scalar(GC_BGD)); // outside = definite BG
+    gc.setTo(new cv.Scalar(GC_PR_FGD), dilated);                // band = probable FG
+    gc.setTo(new cv.Scalar(GC_FGD), eroded);                    // core = definite FG
+
+    bgd = new cv.Mat(); fgd = new cv.Mat();
+    cv.grabCut(rgb, gc, new cv.Rect(0, 0, 1, 1), bgd, fgd, 2, cv.GC_INIT_WITH_MASK);
+
+    // FG = GC_FGD(1) | GC_PR_FGD(3) = the odd values = (gc & 1).
+    ones = new cv.Mat(dh, dw, cv.CV_8UC1, new cv.Scalar(1));
+    fg = new cv.Mat(); cv.bitwise_and(gc, ones, fg);
+    cv.threshold(fg, fg, 0, 255, cv.THRESH_BINARY);
+
+    const out = new cv.Mat();
+    if (scale < 1) cv.resize(fg, out, new cv.Size(mask.cols, mask.rows), 0, 0, cv.INTER_NEAREST);
+    else fg.copyTo(out);
+    return out;
+  } catch (e) {
+    console.warn('Boundary refine skipped, using raw mask:', e instanceof Error ? e.message : e);
+    return mask.clone();
+  } finally {
+    deleteMats(full, imgS, maskS, rgb, eroded, dilated, ker, gc, bgd, fgd, ones, fg);
+  }
+}
+
 // SOD path: a prebuilt foreground mask from the trained model → per-tool results
-// through the exact same gates as the classical path.
-function traceMask(maskData: Uint8Array, width: number, height: number): TraceResult[] {
-  const mask = new cv.Mat(height, width, cv.CV_8UC1);
-  mask.data.set(maskData);
+// through the exact same gates as the classical path. When the source image is
+// provided, GrabCut-refine the mask boundary to the real tool edges first.
+function traceMask(maskData: Uint8Array, width: number, height: number, imageData?: ImageData): TraceResult[] {
+  const raw = new cv.Mat(height, width, cv.CV_8UC1);
+  raw.data.set(maskData);
+  const mask = imageData ? refineMaskToEdges(raw, imageData) : raw.clone();
   const results = tracePreparedMask(mask, height, width);
-  deleteMats(mask);
-  console.log(`traceMask: found ${results.length} tools`);
+  deleteMats(raw, mask);
+  console.log(`traceMask: found ${results.length} tools${imageData ? ' (edge-refined)' : ''}`);
   return results;
 }
 
@@ -1746,9 +1810,13 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
       case 'proposeRegions':
         result = proposeRegions(payload.imageData, payload.paperCorners);
         break;
-      case 'traceMask':
-        result = traceMask(new Uint8Array(payload.mask), payload.width, payload.height);
+      case 'traceMask': {
+        const refineImg = payload.rgba
+          ? new ImageData(new Uint8ClampedArray(payload.rgba), payload.width, payload.height)
+          : undefined;
+        result = traceMask(new Uint8Array(payload.mask), payload.width, payload.height, refineImg);
         break;
+      }
       default:
         throw new Error(`Unknown message type: ${type}`);
     }
