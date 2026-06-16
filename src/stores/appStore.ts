@@ -67,7 +67,11 @@ export interface AppState {
   // Workflow
   currentStep: WorkflowStep;
   setCurrentStep: (step: WorkflowStep) => void;
-  
+
+  // Project name (cosmetic — shown/edited in the header)
+  projectName: string;
+  setProjectName: (name: string) => void;
+
   // Image
   imageFile: File | null;
   imageUrl: string | null;
@@ -177,6 +181,7 @@ const DEFAULT_DESIGN_SETTINGS: DesignSettings = {
 
 const initialState = {
   currentStep: 'paper' as WorkflowStep,
+  projectName: 'Untitled',
   imageFile: null,
   imageUrl: null,
   imageSize: null,
@@ -204,7 +209,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   ...initialState,
   
   setCurrentStep: (step) => set({ currentStep: step }),
-  
+
+  setProjectName: (name) => set({ projectName: name }),
+
   setImage: (file) => {
     // Revoke previous URL if exists
     const prevUrl = get().imageUrl;

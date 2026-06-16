@@ -10,13 +10,13 @@
 import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { ThreeElements } from '@react-three/fiber';
-import { OrbitControls, GizmoHelper, GizmoViewport, Grid, Environment } from '@react-three/drei';
+import { OrbitControls, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
+import { ScalableGrid, ViewCube, NavigationHelp } from '@rapidtool/cad-ui';
 import { useAppStore, type LayoutShape, type DesignSettings } from '../stores';
 import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/gridfinityGeometry';
 import { offsetPolygon } from '../lib/geometry';
-import { RotateCcw, Box } from 'lucide-react';
 
 // Extend JSX.IntrinsicElements for R3F
 declare module 'react' {
@@ -600,6 +600,33 @@ const Scene: React.FC<SceneProps> = ({ layoutState, toolOutlines, pixelsPerMm, s
     }
   };
 
+  // Snap the camera to a named orientation. Driven by the header view buttons and
+  // the ViewCube — both dispatch 'viewer-orientation'; 'viewer-reset' re-centres.
+  useEffect(() => {
+    const dist = Math.max(maxDim, 1) * 1.6;
+    const dirs: Record<string, [number, number, number]> = {
+      front: [0, 0, 1], back: [0, 0, -1], right: [1, 0, 0], left: [-1, 0, 0],
+      top: [0, 1, 0], bottom: [0, -1, 0],
+      iso: [1, 0.85, 1], isometric: [1, 0.85, 1],
+    };
+    const applyOrientation = (o: string) => {
+      const d = dirs[o] ?? dirs.iso;
+      const v = new THREE.Vector3(d[0], d[1], d[2]).normalize().multiplyScalar(dist);
+      camera.position.set(v.x, v.y, v.z);
+      camera.lookAt(0, 0, 0);
+      const c = controlsRef.current;
+      if (c) { c.target.set(0, 0, 0); c.update(); }
+    };
+    const onOrient = (e: Event) => applyOrientation((e as CustomEvent<string>).detail);
+    const onReset = () => controlsRef.current?.reset?.();
+    window.addEventListener('viewer-orientation', onOrient as EventListener);
+    window.addEventListener('viewer-reset', onReset);
+    return () => {
+      window.removeEventListener('viewer-orientation', onOrient as EventListener);
+      window.removeEventListener('viewer-reset', onReset);
+    };
+  }, [camera, maxDim]);
+
   return (
     <>
       {/* Lighting */}
@@ -624,19 +651,19 @@ const Scene: React.FC<SceneProps> = ({ layoutState, toolOutlines, pixelsPerMm, s
         settings={settings}
       />
 
-      {/* Grid helper */}
-      <Grid
-        args={[300, 300]}
-        cellSize={10}
-        cellThickness={0.5}
-        cellColor="#444444"
-        sectionSize={42}
-        sectionThickness={1}
-        sectionColor="#666666"
-        fadeDistance={400}
-        fadeStrength={1}
-        position={[0, -0.1, 0]}
-      />
+      {/* Adaptive grid (shared cad-ui component, sized to the layout) */}
+      <group position={[0, -0.1, 0]}>
+        <ScalableGrid
+          bounds={{
+            min: new THREE.Vector3(-layoutWidth / 2, 0, -layoutHeight / 2),
+            max: new THREE.Vector3(layoutWidth / 2, 0, layoutHeight / 2),
+            center: new THREE.Vector3(0, 0, 0),
+            size: new THREE.Vector3(layoutWidth, 0, layoutHeight),
+            radius: maxDim / 2,
+            unitsScale: 1,
+          }}
+        />
+      </group>
 
       {/* Orbit Controls */}
       <OrbitControls
@@ -648,50 +675,6 @@ const Scene: React.FC<SceneProps> = ({ layoutState, toolOutlines, pixelsPerMm, s
         maxDistance={500}
         maxPolarAngle={Math.PI / 2 + 0.1}
       />
-
-      {/* Gizmo */}
-      <GizmoHelper alignment="bottom-right" margin={[80, 80]}>
-        <GizmoViewport
-          axisColors={['#f73c4e', '#6be96b', '#4d9cf7']}
-          labelColor="white"
-        />
-      </GizmoHelper>
-    </>
-  );
-};
-
-// ============================================================================
-// View Controls Component
-// ============================================================================
-
-interface ViewControlsProps {
-  onResetView: () => void;
-  gridSize: string;
-}
-
-const ViewControls: React.FC<ViewControlsProps> = ({ onResetView, gridSize }) => {
-  return (
-    <>
-      {/* Grid size label */}
-      <div className="absolute bottom-16 left-1/2 transform -translate-x-1/2 bg-[hsl(var(--card))/90] backdrop-blur-sm px-3 py-1.5 rounded-md text-xs text-[hsl(var(--muted-foreground))] font-tech shadow-sm">
-        {gridSize} Grid
-      </div>
-
-      {/* Reset view button */}
-      <button
-        onClick={onResetView}
-        className="absolute top-4 right-4 flex items-center gap-1.5 px-2.5 py-1.5 bg-[hsl(var(--card))/90] backdrop-blur-sm border border-[hsl(var(--border))] rounded-lg shadow-sm hover:bg-[hsl(var(--muted))] transition-colors"
-        title="Reset camera view"
-      >
-        <RotateCcw className="w-3.5 h-3.5 text-[hsl(var(--muted-foreground))]" />
-        <span className="text-xs">Reset View</span>
-      </button>
-
-      {/* Navigation hints */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-2 text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))/80] backdrop-blur-sm px-2.5 py-1.5 rounded-md">
-        <Box className="w-3 h-3" />
-        <span>Left-click drag to rotate • Right-click drag to pan • Scroll to zoom</span>
-      </div>
     </>
   );
 };
@@ -715,15 +698,7 @@ export const DesignWorkspace: React.FC = () => {
     controlsRef.current = controls;
   };
 
-  const handleResetView = () => {
-    if (controlsRef.current) {
-      // Reset the orbit controls to initial state
-      controlsRef.current.reset();
-    }
-  };
-
   const { grid } = layoutState;
-  const gridSize = `${grid.cols}×${grid.rows}`;
 
   return (
     <div className="relative h-full w-full bg-[hsl(var(--workspace-bg))]">
@@ -764,8 +739,13 @@ export const DesignWorkspace: React.FC = () => {
         />
       </Canvas>
 
-      {/* Overlay Controls */}
-      <ViewControls onResetView={handleResetView} gridSize={gridSize} />
+      {/* ViewCube — orientation widget (dispatches to the Scene camera handler) */}
+      <div className="absolute top-4 right-4 z-10">
+        <ViewCube size={96} onViewChange={(o) => window.dispatchEvent(new CustomEvent('viewer-orientation', { detail: o }))} />
+      </div>
+
+      {/* Navigation help (shared cad-ui overlay) */}
+      <NavigationHelp storageKey="tooltrace-nav" position="bottom-left" />
 
       {/* Design Info */}
       <div className="absolute top-4 left-4 flex items-center gap-3 bg-[hsl(var(--card))/90] backdrop-blur-sm border border-[hsl(var(--border))] rounded-lg px-3 py-1.5 shadow-sm">

@@ -1712,7 +1712,7 @@ export const ControlPanel: React.FC = () => {
   const { currentStep } = useAppStore();
 
   return (
-    <div className="h-full flex flex-col sidebar-glass border-l border-[hsl(var(--border)/0.5)]">
+    <div className="h-full flex flex-col">
       {/* Step Content */}
       <div className="flex-1 overflow-hidden p-3">
         {currentStep === "paper" && <PaperStepPanel />}
