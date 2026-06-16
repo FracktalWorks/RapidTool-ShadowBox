@@ -34,7 +34,10 @@ ort.env.wasm.numThreads = Math.min((self.navigator?.hardwareConcurrency || 4), 8
 // 25MB), same-origin from /public/models — no R2, no CORS. The worker fetches all
 // parts and reassembles them. VITE_MODEL_URL can override the base (e.g. an R2
 // path that also has .partN files).
-const MODEL_BASE = import.meta.env.VITE_MODEL_URL || '/models/isnet_q8.onnx';
+// Only honour a real path ('/…') or URL ('http…') — a malformed value (e.g. a
+// stray "20" from a mixed-up env var) falls back to the same-origin chunks.
+const _modelUrl = import.meta.env.VITE_MODEL_URL as string | undefined;
+const MODEL_BASE = _modelUrl && /^(https?:|\/)/.test(_modelUrl) ? _modelUrl : '/models/isnet_q8.onnx';
 const MODEL_PARTS = 3;
 const SIZE = 1024;
 
