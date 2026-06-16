@@ -265,16 +265,45 @@ function createPocketFloorWithCutouts(
   resultBrush.updateMatrixWorld();
 
   shapes.forEach((shape) => {
-    const cutoutShape = createSolidShape(shape, width, height, toolOutlines, pixelsPerMm, offsetMm);
-    if (!cutoutShape) return;
+    let cutoutGeometry: THREE.BufferGeometry;
 
-    const cutoutGeometry = new THREE.ExtrudeGeometry(cutoutShape, {
-      depth: floorThickness + 2, // Slightly thicker to prevent Z-fighting artifacts
-      bevelEnabled: false,
-    });
-    
-    cutoutGeometry.translate(0, 0, -1); // Move down slightly
-    
+    if (shape.type === 'finger-notch') {
+      const halfW = shape.width / 2;
+      const halfH = shape.height / 2;
+      const centerX = shape.x + shape.width / 2 - width / 2;
+      const centerY = -(shape.y + shape.height / 2 - height / 2); // Flip Y
+
+      const radius = Math.min(halfW, halfH);
+      const length = Math.max(0, Math.max(shape.width, shape.height) - 2 * radius);
+
+      // Create a capsule geometry
+      cutoutGeometry = new THREE.CapsuleGeometry(radius, length, 16, 32);
+
+      // By default CapsuleGeometry is aligned along the Y-axis.
+      // If width > height, we rotate it to align along the X-axis.
+      if (shape.width >= shape.height) {
+        cutoutGeometry.rotateZ(Math.PI / 2);
+      }
+
+      // Apply layout rotation (negated to match Y-flip)
+      if (shape.rotation) {
+        cutoutGeometry.rotateZ((-shape.rotation * Math.PI) / 180);
+      }
+
+      // Position the capsule center axis at the top surface of the pocket floor
+      cutoutGeometry.translate(centerX, centerY, floorThickness);
+    } else {
+      const cutoutShape = createSolidShape(shape, width, height, toolOutlines, pixelsPerMm, offsetMm);
+      if (!cutoutShape) return;
+
+      cutoutGeometry = new THREE.ExtrudeGeometry(cutoutShape, {
+        depth: floorThickness + 2, // Slightly thicker to prevent Z-fighting artifacts
+        bevelEnabled: false,
+      });
+
+      cutoutGeometry.translate(0, 0, -1); // Move down slightly
+    }
+
     const cutoutBrush = new Brush(cutoutGeometry);
     cutoutBrush.updateMatrixWorld();
 
@@ -349,7 +378,7 @@ export function generateExportMesh(
   // Position walls on top of base plate
   const wallsMatrix = new THREE.Matrix4();
   wallsMatrix.makeRotationX(-Math.PI / 2);
-  wallsMatrix.setPosition(0, -settings.baseHeight, 0);
+  wallsMatrix.setPosition(0, settings.baseHeight, 0);
   wallsGeometry.applyMatrix4(wallsMatrix);
   geometries.push(wallsGeometry);
   
@@ -357,7 +386,7 @@ export function generateExportMesh(
   if (pocketFloorGeometry) {
     const floorMatrix = new THREE.Matrix4();
     floorMatrix.makeRotationX(-Math.PI / 2);
-    floorMatrix.setPosition(0, -settings.baseHeight, 0);
+    floorMatrix.setPosition(0, settings.baseHeight, 0);
     pocketFloorGeometry.applyMatrix4(floorMatrix);
     geometries.push(pocketFloorGeometry);
   }
@@ -375,7 +404,7 @@ export function generateExportMesh(
     const lip = createGridfinityLip(layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize);
     const lipMatrix = new THREE.Matrix4();
     lipMatrix.makeRotationX(-Math.PI / 2);
-    lipMatrix.setPosition(0, -(settings.baseHeight + settings.cutoutDepth), 0);
+    lipMatrix.setPosition(0, settings.baseHeight + settings.cutoutDepth, 0);
     lip.applyMatrix4(lipMatrix);
     geometries.push(lip);
   }
@@ -528,6 +557,19 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
     );
   }, [layoutWidth, layoutHeight, settings.wallThickness, settings.cutoutDepth, settings.baseHeight, settings.chamferSize, shapes, toolOutlines, pixelsPerMm]);
   
+  // Real Gridfinity INTERLOCKING FEET — the stair-step profile that seats into a
+  // baseplate. Tiled one per 42mm cell, hanging below the base plate (z<0).
+  const feetGeometry = useMemo(() => {
+    if (!settings.gridfinityBase) return null;
+    return createGridfinityFeet(unitsFor(layoutWidth), unitsFor(layoutHeight));
+  }, [layoutWidth, layoutHeight, settings.gridfinityBase]);
+
+  // Stacking lip on the top rim (so a bin stacks on this one).
+  const lipGeometry = useMemo(() => {
+    if (!settings.gridfinityBase) return null;
+    return createGridfinityLip(layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize);
+  }, [layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize, settings.gridfinityBase]);
+
   // Materials
   const holderMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
@@ -546,20 +588,52 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
       side: THREE.FrontSide,
     });
   }, []);
+
+  const gridfinityMaterial = useMemo(() => {
+    return new THREE.MeshStandardMaterial({
+      color: 0x404040,
+      roughness: 0.7,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+  }, []);
   
   return (
     <group ref={meshRef} rotation={[-Math.PI / 2, 0, 0]}>
+      {/* Solid base plate (bottom - always solid) */}
       <mesh geometry={basePlateGeometry} material={basePlateMaterial} />
+
+      {/* Walls with inner pocket - sits on top of base plate */}
       <mesh 
         geometry={wallsGeometry} 
         material={holderMaterial}
         position={[0, 0, settings.baseHeight]}
       />
+
+      {/* Raised floor inside pocket with tool cutout holes */}
       {pocketFloorGeometry && (
         <mesh 
           geometry={pocketFloorGeometry} 
           material={holderMaterial}
           position={[0, 0, settings.baseHeight]}
+        />
+      )}
+
+      {/* Gridfinity interlocking feet - stair-step profile, hangs below base plate */}
+      {feetGeometry && (
+        <mesh
+          geometry={feetGeometry}
+          material={gridfinityMaterial}
+          position={[0, 0, 0]}
+        />
+      )}
+
+      {/* Gridfinity stacking lip - chamfered rim on the top of the walls */}
+      {lipGeometry && (
+        <mesh
+          geometry={lipGeometry}
+          material={holderMaterial}
+          position={[0, 0, settings.baseHeight + settings.cutoutDepth]}
         />
       )}
     </group>
