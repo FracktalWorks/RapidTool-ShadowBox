@@ -42,9 +42,17 @@ const SIZE = 1024;
 async function loadModelBuffer(): Promise<Uint8Array> {
   const buffers = await Promise.all(
     Array.from({ length: MODEL_PARTS }, async (_, i) => {
-      const r = await fetch(`${MODEL_BASE}.part${i}`);
-      if (!r.ok) throw new Error(`SOD model part ${i}: HTTP ${r.status}`);
-      return r.arrayBuffer();
+      const url = `${MODEL_BASE}.part${i}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`SOD model part ${i}: HTTP ${r.status} @ ${url}`);
+      const buf = await r.arrayBuffer();
+      // If the host's SPA fallback served index.html (part missing / old deploy),
+      // it's not a model chunk — fail clearly so the caller drops to classical.
+      const firstByte = new Uint8Array(buf.slice(0, 1))[0];
+      if (firstByte === 0x3c /* '<' */ || buf.byteLength < 1_000_000) {
+        throw new Error(`SOD model part ${i} is not a valid chunk (${buf.byteLength} bytes) — the .part files aren't being served at ${url}. Are you on the latest Pages deploy?`);
+      }
+      return buf;
     }),
   );
   const total = buffers.reduce((n, b) => n + b.byteLength, 0);
