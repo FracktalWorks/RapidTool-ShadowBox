@@ -278,17 +278,45 @@ function createPocketFloorWithCutouts(
   resultBrush.updateMatrixWorld();
 
   shapes.forEach((shape) => {
-    const cutoutShape = createSolidShape(shape, width, height, toolOutlines, pixelsPerMm, offsetMm);
-    if (!cutoutShape) return;
+    let cutoutGeometry: THREE.BufferGeometry;
 
-    const cutoutGeometry = new THREE.ExtrudeGeometry(cutoutShape, {
-      depth: floorThickness + 2, // Slightly thicker to prevent Z-fighting artifacts
-      bevelEnabled: false,
-    });
-    
-    cutoutGeometry.translate(0, 0, -1); // Move down slightly
-    
-    // Add chamfer manually if necessary or simplify mesh
+    if (shape.type === 'finger-notch') {
+      const halfW = shape.width / 2;
+      const halfH = shape.height / 2;
+      const centerX = shape.x + shape.width / 2 - width / 2;
+      const centerY = -(shape.y + shape.height / 2 - height / 2); // Flip Y
+
+      const radius = Math.min(halfW, halfH);
+      const length = Math.max(0, Math.max(shape.width, shape.height) - 2 * radius);
+
+      // Create a capsule geometry
+      cutoutGeometry = new THREE.CapsuleGeometry(radius, length, 16, 32);
+
+      // By default CapsuleGeometry is aligned along the Y-axis.
+      // If width > height, we rotate it to align along the X-axis.
+      if (shape.width >= shape.height) {
+        cutoutGeometry.rotateZ(Math.PI / 2);
+      }
+
+      // Apply layout rotation (negated to match Y-flip)
+      if (shape.rotation) {
+        cutoutGeometry.rotateZ((-shape.rotation * Math.PI) / 180);
+      }
+
+      // Position the capsule center axis at the top surface of the pocket floor
+      cutoutGeometry.translate(centerX, centerY, floorThickness);
+    } else {
+      const cutoutShape = createSolidShape(shape, width, height, toolOutlines, pixelsPerMm, offsetMm);
+      if (!cutoutShape) return;
+
+      cutoutGeometry = new THREE.ExtrudeGeometry(cutoutShape, {
+        depth: floorThickness + 2, // Slightly thicker to prevent Z-fighting artifacts
+        bevelEnabled: false,
+      });
+
+      cutoutGeometry.translate(0, 0, -1); // Move down slightly
+    }
+
     const cutoutBrush = new Brush(cutoutGeometry);
     cutoutBrush.updateMatrixWorld();
 
