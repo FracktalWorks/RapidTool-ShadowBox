@@ -10,11 +10,12 @@
 import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { ThreeElements } from '@react-three/fiber';
-import { OrbitControls, Environment, GizmoHelper, GizmoViewport } from '@react-three/drei';
+import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
-import { ScalableGrid, NavigationHelp } from '@rapidtool/cad-ui';
+import { NavigationHelp } from '@rapidtool/cad-ui';
 import { useAppStore, type LayoutShape, type DesignSettings } from '../stores';
+import { useTheme } from '../hooks';
 import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/gridfinityGeometry';
 import { offsetPolygon } from '../lib/geometry';
 
@@ -575,7 +576,56 @@ interface SceneProps {
   onControlsReady: (controls: any) => void;
 }
 
-const Scene: React.FC<SceneProps> = ({ layoutState, toolOutlines, pixelsPerMm, settings, onControlsReady }) => {
+// Grid sizing — mirrors RapidTool-Fixture's calculateGridConfig (geometryUtils.ts).
+function calculateGridConfig(maxExtent: number) {
+  const rawSize = maxExtent * 2 * 1.2;
+  const niceValues = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000];
+  let gridSize = niceValues[0];
+  for (const val of niceValues) { if (val >= rawSize) { gridSize = val; break; } gridSize = val; }
+  const cellSizes = [1, 5, 10, 25, 50, 100, 250, 500];
+  let cellSize = 10;
+  for (const cs of cellSizes) { if (gridSize / cs <= 50) { cellSize = cs; break; } cellSize = cs; }
+  const divisions = Math.floor(gridSize / cellSize);
+  const majorDivisions = cellSize >= 100 ? 1 : (cellSize >= 25 ? 4 : 10);
+  return { size: gridSize, divisions, majorDivisions, cellSize };
+}
+
+// Ground grid identical to Fixture's ScalableGrid: minor + major gridHelpers
+// (dark-mode aware) plus red-X / green-Z axis lines through the origin.
+const FixtureGrid: React.FC<{ maxExtent: number; isDark: boolean }> = ({ maxExtent, isDark }) => {
+  const cfg = useMemo(() => calculateGridConfig(maxExtent), [maxExtent]);
+  const xAxis = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-cfg.size / 2, 0.01, 0, cfg.size / 2, 0.01, 0]), 3));
+    return new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xff4444 }));
+  }, [cfg.size]);
+  const zAxis = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0, 0.01, -cfg.size / 2, 0, 0.01, cfg.size / 2]), 3));
+    return new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x44ff44 }));
+  }, [cfg.size]);
+  return (
+    <group position={[0, -0.01, 0]} frustumCulled={false}>
+      <gridHelper args={[cfg.size, cfg.divisions, isDark ? '#3a3a4a' : '#d0d0d0', isDark ? '#2a2a3a' : '#e8e8e8']} />
+      <gridHelper args={[cfg.size, Math.floor(cfg.divisions / cfg.majorDivisions), isDark ? '#4a4a5a' : '#a0a0a0', isDark ? '#4a4a5a' : '#a0a0a0']} position={[0, 0.001, 0]} />
+      <primitive object={xAxis} />
+      <primitive object={zAxis} />
+    </group>
+  );
+};
+
+// Lighting identical to Fixture's SceneLighting (renderers/SceneLighting.tsx).
+const SceneLighting: React.FC = () => (
+  <>
+    <ambientLight intensity={0.5} />
+    <directionalLight position={[10, 10, 5]} intensity={1.0} castShadow />
+    <directionalLight position={[-10, -10, -5]} intensity={0.5} />
+    <directionalLight position={[5, 15, -5]} intensity={0.6} />
+    <hemisphereLight args={['#ffffff', '#444444', 0.6]} />
+  </>
+);
+
+const Scene: React.FC<SceneProps & { isDarkMode: boolean }> = ({ layoutState, toolOutlines, pixelsPerMm, settings, onControlsReady, isDarkMode }) => {
   const { camera } = useThree();
   const controlsRef = useRef<any>(null);
 
@@ -629,19 +679,11 @@ const Scene: React.FC<SceneProps> = ({ layoutState, toolOutlines, pixelsPerMm, s
 
   return (
     <>
-      {/* Lighting */}
-      <ambientLight intensity={0.4} />
-      <directionalLight
-        position={[100, 100, 100]}
-        intensity={1}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-      />
-      <directionalLight position={[-50, 50, -50]} intensity={0.5} />
-      <pointLight position={[0, 100, 0]} intensity={0.3} />
+      {/* Background — matches Fixture's viewer (dark #1a1a2e / light #ffffff) */}
+      <color attach="background" args={[isDarkMode ? '#1a1a2e' : '#ffffff']} />
 
-      {/* Environment */}
-      <Environment preset="studio" />
+      {/* Lighting (identical to Fixture's SceneLighting) */}
+      <SceneLighting />
 
       {/* Tool Holder Mesh */}
       <ToolHolderMesh
@@ -651,19 +693,8 @@ const Scene: React.FC<SceneProps> = ({ layoutState, toolOutlines, pixelsPerMm, s
         settings={settings}
       />
 
-      {/* Adaptive grid (shared cad-ui component, sized to the layout) */}
-      <group position={[0, -0.1, 0]}>
-        <ScalableGrid
-          bounds={{
-            min: new THREE.Vector3(-layoutWidth / 2, 0, -layoutHeight / 2),
-            max: new THREE.Vector3(layoutWidth / 2, 0, layoutHeight / 2),
-            center: new THREE.Vector3(0, 0, 0),
-            size: new THREE.Vector3(layoutWidth, 0, layoutHeight),
-            radius: maxDim / 2,
-            unitsScale: 1,
-          }}
-        />
-      </group>
+      {/* Ground grid (identical to Fixture's ScalableGrid) */}
+      <FixtureGrid maxExtent={maxDim / 2} isDark={isDarkMode} />
 
       {/* Orbit Controls */}
       <OrbitControls
@@ -698,6 +729,8 @@ export const DesignWorkspace: React.FC = () => {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const controlsRef = useRef<any>(null);
+  const { theme } = useTheme();
+  const isDarkMode = theme === 'dark';
 
   const handleControlsReady = (controls: any) => {
     controlsRef.current = controls;
@@ -741,6 +774,7 @@ export const DesignWorkspace: React.FC = () => {
           pixelsPerMm={pixelsPerMm}
           settings={designSettings}
           onControlsReady={handleControlsReady}
+          isDarkMode={isDarkMode}
         />
       </Canvas>
 

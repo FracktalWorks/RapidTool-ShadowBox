@@ -6,7 +6,7 @@
  * Opened from the account button at the bottom of the left toolbar.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { User, Mail, Calendar, Shield, LogOut, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 
@@ -36,9 +36,9 @@ const Field: React.FC<{ icon: React.ReactNode; label: string; value: string }> =
 
 export const AccountSettings: React.FC<AccountSettingsProps> = ({ open, onOpenChange, onLogout }) => {
   const user = useAuthStore((s) => s.user);
-  const [isEditing, setIsEditing] = useState(false);
 
-  if (!open) return null;
+  // Only ever render real, signed-in account data (same contract as the Portal).
+  if (!open || !user) return null;
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center" role="dialog" aria-modal="true">
@@ -105,16 +105,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({ open, onOpenCh
         <div className="h-px bg-[hsl(var(--border))] my-6" />
 
         {/* Actions */}
-        <div className="flex flex-col gap-3">
-          <button onClick={() => setIsEditing((v) => !v)}
-            className="w-full rounded-lg border border-[hsl(var(--border))] py-2.5 text-sm font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] tech-transition">
-            {isEditing ? 'Done' : 'Edit Profile'}
-          </button>
-          <button onClick={onLogout}
-            className="w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold text-white bg-[hsl(var(--destructive))] hover:opacity-90 tech-transition">
-            <LogOut className="w-4 h-4" /> Logout
-          </button>
-        </div>
+        <button onClick={onLogout}
+          className="w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold text-white bg-[hsl(var(--destructive))] hover:opacity-90 tech-transition">
+          <LogOut className="w-4 h-4" /> Logout
+        </button>
       </div>
     </div>
   );

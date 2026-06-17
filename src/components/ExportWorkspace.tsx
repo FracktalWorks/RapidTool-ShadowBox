@@ -7,7 +7,7 @@
  * - Download the final export
  */
 
-import React, { useRef, useMemo, useEffect, useCallback } from 'react';
+import React, { useRef, useMemo, useEffect, useCallback, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { ThreeElements } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment } from '@react-three/drei';
@@ -17,7 +17,7 @@ import { STLExporter } from 'three-stdlib';
 import { useAppStore, type LayoutShape, type DesignSettings } from '../stores';
 import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/gridfinityGeometry';
 import { offsetPolygon } from '../lib/geometry';
-import { Download, FileCode, Box, RotateCcw, Layers } from 'lucide-react';
+import { Download, FileCode, Box, RotateCcw, Layers, AlertCircle } from 'lucide-react';
 import { downloadSVG } from '../lib/exportSVG';
 
 // Extend JSX.IntrinsicElements for R3F
@@ -866,7 +866,8 @@ export const ExportWorkspace: React.FC = () => {
   } = useAppStore();
   
   const controlsRef = useRef<any>(null);
-  
+  const [exportError, setExportError] = useState<string | null>(null);
+
   // Reset view for 3D
   const handleResetView = useCallback(() => {
     if (controlsRef.current) {
@@ -877,10 +878,11 @@ export const ExportWorkspace: React.FC = () => {
   // Handle export
   const handleExport = useCallback(async () => {
     if (!pixelsPerMm) {
-      alert('Paper calibration required for accurate export');
+      setExportError('Calibrate the paper scale first so the export is to size.');
+      setTimeout(() => setExportError(null), 6000);
       return;
     }
-    
+
     setProcessing(true, `Exporting ${exportFormat.toUpperCase()}...`);
     
     try {
@@ -927,12 +929,14 @@ export const ExportWorkspace: React.FC = () => {
         }
       }
     } catch (error) {
+      // Keep the technical detail in the console; show the user a calm message.
       console.error('Export failed:', error);
-      alert(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setExportError("Couldn't export your design. Please try again.");
+      setTimeout(() => setExportError(null), 6000);
     } finally {
       setProcessing(false);
     }
-  }, [exportFormat, toolOutlines, layoutState, designSettings, pixelsPerMm, setProcessing]);
+  }, [exportFormat, toolOutlines, layoutState, designSettings, pixelsPerMm, clearanceValue, setProcessing]);
   
   // Calculate dimensions for display
   const layoutWidth = layoutState.grid.cols * layoutState.grid.cellWidthMm;
@@ -1005,12 +1009,21 @@ export const ExportWorkspace: React.FC = () => {
         )}
         <button
           onClick={handleExport}
-          className="h-9 px-4 bg-[hsl(var(--success))] text-white rounded-lg flex items-center gap-2 text-xs font-medium hover:bg-[hsl(var(--success)/0.9)] transition-colors"
+          className="h-9 px-4 text-white rounded-lg flex items-center gap-2 text-xs font-semibold transition-all hover:opacity-90 active:scale-95"
+          style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-btn)' }}
         >
           <Download className="w-3.5 h-3.5" />
           Export {exportFormat.toUpperCase()}
         </button>
       </div>
+
+      {/* Graceful export error (no blocking alert) */}
+      {exportError && (
+        <div className="absolute bottom-16 right-4 z-20 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-white bg-[hsl(var(--destructive))] shadow-lg">
+          <AlertCircle className="w-3.5 h-3.5" />
+          {exportError}
+        </div>
+      )}
       
       {/* Export Info */}
       <div className="absolute bottom-4 left-4 flex items-center gap-2 text-[10px] text-[hsl(var(--muted-foreground))] bg-[hsl(var(--card))/80] backdrop-blur-sm px-2.5 py-1.5 rounded-md">

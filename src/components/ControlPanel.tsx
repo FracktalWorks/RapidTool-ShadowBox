@@ -618,7 +618,7 @@ const ToolsStepPanel: React.FC = () => {
           <div className="flex items-center gap-2 p-2.5 bg-[hsl(var(--primary)/0.05)] border border-[hsl(var(--primary)/0.1)] rounded-lg">
             <Loader2 className="w-3.5 h-3.5 text-[hsl(var(--primary))] animate-spin" />
             <span className="text-xs text-[hsl(var(--primary))]">
-              {aiProgress !== null ? `AI detecting tools… ${aiProgress}%` : 'Initializing AI model…'}
+              {aiProgress !== null ? `Detecting tools… ${aiProgress}%` : 'Preparing…'}
             </span>
           </div>
         )}
@@ -633,8 +633,8 @@ const ToolsStepPanel: React.FC = () => {
             flex items-center justify-center gap-1.5
             disabled:opacity-50 disabled:cursor-not-allowed
           "
-          style={{ background: 'var(--gradient-brand)', boxShadow: 'var(--shadow-btn)' }}
-          title="Autonomous AI detection — precise on chrome too. Runs entirely locally on your device."
+          style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-btn)' }}
+          title="Automatically detect every tool on the sheet — precise even on shiny/chrome tools. Runs entirely on your device."
         >
           {isAiDetecting ? (
             <>
@@ -644,7 +644,7 @@ const ToolsStepPanel: React.FC = () => {
           ) : (
             <>
               <Sparkles className="w-3.5 h-3.5" />
-              Auto Detect Tools (AI)
+              Auto Detect Tools
             </>
           )}
         </button>
@@ -688,9 +688,9 @@ const ToolsStepPanel: React.FC = () => {
               <MousePointerClick
                 className={`w-4 h-4 mb-1.5 ${activeTool === "trace" ? "text-[hsl(var(--primary))]" : "text-[hsl(var(--muted-foreground))]"}`}
               />
-              <div className="text-[13px] font-medium">AI Trace</div>
+              <div className="text-[13px] font-medium">Click Trace</div>
               <div className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">
-                Click a tool — SAM segments it
+                Click a tool to trace it
               </div>
             </button>
             <button
@@ -749,9 +749,9 @@ const ToolsStepPanel: React.FC = () => {
           <div className="p-3 bg-[hsl(var(--muted)/0.4)] rounded-xl">
             <p className="text-[12px] text-[hsl(var(--muted-foreground))] leading-relaxed">
               {activeTool === "box"
-                ? "Draw a rectangle around one tool — GrabCut segments it. Use Refine Edges to correct details."
+                ? "Draw a rectangle around one tool to trace it. Use Refine Edges to correct details."
                 : activeTool === "trace"
-                  ? "Click a tool — on-device AI (SAM 2) traces it precisely. Select a tool to refine it: Left-click to add, Shift+click to subtract." : "Select a listed tool, then drag its anchor points to reshape the curve"}
+                  ? "Click a tool — it's traced precisely on your device. Select a tool to refine it: left-click to add, Shift+click to subtract." : "Select a listed tool, then drag its anchor points to reshape the curve"}
             </p>
           </div>
         )}
@@ -907,10 +907,12 @@ const ExportStepPanel: React.FC = () => {
   const hasLayout = layoutState.shapes.length > 0;
   // const isDisabled = !hasTools || !hasLayout;
   const isDisabled = false;
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const flashMsg = useCallback((m: string) => { setExportMsg(m); setTimeout(() => setExportMsg(null), 6000); }, []);
 
   const handleExport = useCallback(async () => {
     if (!pixelsPerMm) {
-      alert("Paper calibration required for accurate export");
+      flashMsg("Calibrate the paper scale first so the export is to size.");
       return;
     }
 
@@ -970,13 +972,11 @@ const ExportStepPanel: React.FC = () => {
       }
     } catch (error) {
       console.error("Export failed:", error);
-      alert(
-        `Export failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
+      flashMsg("Couldn't export your design. Please try again.");
     } finally {
       setProcessing(false);
     }
-  }, [exportFormat, setProcessing, toolOutlines, pixelsPerMm, clearanceValue]);
+  }, [exportFormat, setProcessing, toolOutlines, layoutState, designSettings, pixelsPerMm, clearanceValue, flashMsg]);
 
   return (
     <div className="h-full flex flex-col">
@@ -988,6 +988,14 @@ const ExportStepPanel: React.FC = () => {
             {!hasTools && <p>• Trace tools in step 2</p>}
             {!hasLayout && <p>• Configure layout in step 3</p>}
           </div>
+        </div>
+      )}
+
+      {/* Export message (replaces blocking alerts) */}
+      {exportMsg && (
+        <div className="mb-3 p-2.5 bg-[hsl(var(--destructive)/0.08)] border border-[hsl(var(--destructive)/0.2)] rounded-lg flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-[hsl(var(--destructive))] shrink-0" />
+          <p className="text-[12px] text-[hsl(var(--destructive))] font-medium">{exportMsg}</p>
         </div>
       )}
 

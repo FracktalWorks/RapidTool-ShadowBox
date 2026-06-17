@@ -1018,9 +1018,9 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2.5 px-4 py-2 rounded-xl tech-glass shadow-lg">
           <div className="w-3.5 h-3.5 rounded-full border-2 border-[hsl(var(--primary))] border-t-transparent animate-spin" />
           <span className="text-[12px] font-medium text-[hsl(var(--foreground))]">
-            Loading AI model
+            Getting ready
             {samProgress.progress ? ` — ${Math.round(samProgress.progress)}%` : '…'}
-            <span className="text-[hsl(var(--muted-foreground))]"> (one time, then cached)</span>
+            <span className="text-[hsl(var(--muted-foreground))]"> (one time only)</span>
           </span>
         </div>
       )}

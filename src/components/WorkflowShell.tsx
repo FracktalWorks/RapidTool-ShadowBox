@@ -205,7 +205,7 @@ export const WorkflowShell: React.FC = () => {
           <RapidToolLogo productName="ToolTrace" icon={<Wrench size={18} />} />
           <div className="w-px h-6 bg-[hsl(var(--border))]" />
           <button onClick={handleReset} title="Reset session"
-            className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] tech-transition">
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--accent-foreground))] hover:bg-[hsl(var(--accent))] tech-transition">
             <RotateCcw className="w-4 h-4" /> Reset
           </button>
         </div>
@@ -238,7 +238,7 @@ export const WorkflowShell: React.FC = () => {
           <div className="flex items-center gap-1">
             {VIEW_BUTTONS.map(({ o, Icon, cls, title }) => (
               <button key={o} onClick={() => handleOrientation(o)} title={title}
-                className="w-8 h-8 flex items-center justify-center rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--primary))] hover:bg-[hsl(var(--muted))] tech-transition">
+                className="w-8 h-8 flex items-center justify-center rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--accent))] hover:bg-[hsl(var(--accent)/0.12)] tech-transition">
                 <Icon className={`w-4 h-4 ${cls}`} />
               </button>
             ))}
@@ -289,7 +289,7 @@ export const WorkflowShell: React.FC = () => {
             {!isContextCollapsed && <h3 className="font-tech font-semibold text-sm whitespace-nowrap">Context Options</h3>}
             <button onClick={() => setIsContextCollapsed((v) => !v)}
               title={isContextCollapsed ? 'Expand Panel' : 'Collapse Panel'}
-              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--primary)/0.1)] hover:text-[hsl(var(--primary))] ${isContextCollapsed ? 'mx-auto' : ''}`}>
+              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent)/0.12)] hover:text-[hsl(var(--accent))] ${isContextCollapsed ? 'mx-auto' : ''}`}>
               {isContextCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
             </button>
           </div>
@@ -313,7 +313,7 @@ export const WorkflowShell: React.FC = () => {
             {!isPropertiesCollapsed && <h3 className="font-tech font-semibold text-sm whitespace-nowrap">Properties</h3>}
             <button onClick={() => setIsPropertiesCollapsed((v) => !v)}
               title={isPropertiesCollapsed ? 'Expand Properties' : 'Collapse Properties'}
-              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--primary)/0.1)] hover:text-[hsl(var(--primary))] ${isPropertiesCollapsed ? 'mx-auto' : ''}`}>
+              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent)/0.12)] hover:text-[hsl(var(--accent))] ${isPropertiesCollapsed ? 'mx-auto' : ''}`}>
               {isPropertiesCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
@@ -327,26 +327,19 @@ export const WorkflowShell: React.FC = () => {
 
       {/* ── Flow steps bar — horizontal workflow stepper (mirrors Fixture's bottom bar) ── */}
       <div className="h-12 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center px-3">
-        <SidebarIconGroup direction="horizontal" gap={6} align="center">
+        <SidebarIconGroup direction="horizontal" gap={4} align="center">
           {stepConfigs.map((c, i) => {
             const active = c.step === currentStep;
-            const completed = getStepCompletion(c.step);
             return (
-              <React.Fragment key={c.step}>
-                <SidebarIcon
-                  icon={c.icon}
-                  label={c.label}
-                  tooltip={`${i + 1}. ${c.label}`}
-                  active={active}
-                  onClick={() => handleStepClick(c.step)}
-                  size="sm"
-                  badge={completed && !active ? '✓' : undefined}
-                  badgeVariant="success"
-                />
-                {i < stepConfigs.length - 1 && (
-                  <span className="text-[hsl(var(--border))] text-xs select-none">›</span>
-                )}
-              </React.Fragment>
+              <SidebarIcon
+                key={c.step}
+                icon={c.icon}
+                label={c.label}
+                tooltip={`${i + 1}. ${c.label}`}
+                active={active}
+                onClick={() => handleStepClick(c.step)}
+                size="md"
+              />
             );
           })}
         </SidebarIconGroup>
