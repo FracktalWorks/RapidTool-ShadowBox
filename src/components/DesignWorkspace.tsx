@@ -10,7 +10,7 @@
 import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { ThreeElements } from '@react-three/fiber';
-import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
+import { OrbitControls, GizmoHelper, GizmoViewport, AdaptiveDpr } from '@react-three/drei';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { NavigationHelp } from '@rapidtool/cad-ui';
@@ -627,6 +627,7 @@ const SceneLighting: React.FC = () => (
 
 const Scene: React.FC<SceneProps & { isDarkMode: boolean }> = ({ layoutState, toolOutlines, pixelsPerMm, settings, onControlsReady, isDarkMode }) => {
   const { camera } = useThree();
+  const regress = useThree((s) => s.performance.regress); // drop quality while interacting
   const controlsRef = useRef<any>(null);
 
   // Calculate layout dimensions for camera positioning
@@ -696,7 +697,8 @@ const Scene: React.FC<SceneProps & { isDarkMode: boolean }> = ({ layoutState, to
       {/* Ground grid (identical to Fixture's ScalableGrid) */}
       <FixtureGrid maxExtent={maxDim / 2} isDark={isDarkMode} />
 
-      {/* Orbit Controls */}
+      {/* Orbit Controls — onChange regresses quality so AdaptiveDpr lowers the
+          resolution while orbiting/zooming, then restores it when the camera settles. */}
       <OrbitControls
         ref={handleControlsRef}
         makeDefault
@@ -705,6 +707,7 @@ const Scene: React.FC<SceneProps & { isDarkMode: boolean }> = ({ layoutState, to
         minDistance={20}
         maxDistance={500}
         maxPolarAngle={Math.PI / 2 + 0.1}
+        onChange={() => regress()}
       />
 
       {/* Axis-triad gizmo — same config as RapidTool-Fixture (3DScene.tsx) */}
@@ -743,7 +746,11 @@ export const DesignWorkspace: React.FC = () => {
       {/* Three.js Canvas */}
       <Canvas
         ref={canvasRef}
-        shadows
+        // Cap DPR (Fixture does min(dpr, 2)) — full device pixel ratio on hi-DPI
+        // screens is the main cause of laggy orbit on a heavy CSG mesh.
+        dpr={[1, 2]}
+        // Let R3F regress quality during interaction; AdaptiveDpr restores it when idle.
+        performance={{ min: 0.5 }}
         camera={{
           fov: 45,
           near: 0.1,
@@ -768,6 +775,8 @@ export const DesignWorkspace: React.FC = () => {
           canvas.addEventListener('webglcontextrestored', () => { gl.setClearColor(0x000000, 0); }, false);
         }}
       >
+        {/* Drops resolution while orbiting/zooming, restores it when the camera settles. */}
+        <AdaptiveDpr pixelated />
         <Scene
           layoutState={layoutState}
           toolOutlines={toolOutlines}
