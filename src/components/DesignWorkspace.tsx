@@ -7,7 +7,7 @@
  * - Rotate and zoom the 3D model
  */
 
-import React, { useRef, useMemo, useEffect } from 'react';
+import React, { useRef, useMemo, useEffect, useLayoutEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { ThreeElements } from '@react-three/fiber';
 import { OrbitControls, GizmoHelper, GizmoViewport, AdaptiveDpr } from '@react-three/drei';
@@ -525,6 +525,21 @@ const ToolHolderMesh: React.FC<ToolHolderMeshProps> = ({
       side: THREE.DoubleSide,
     });
   }, []);
+
+  // Rest the whole assembly ON the bed: the Gridfinity feet hang below z=0, so
+  // after rotation they'd dip under the grid. Lift the group by its lowest point
+  // (world min-Y) so the feet sit on the grid plane instead of poking through it.
+  useLayoutEffect(() => {
+    const g = meshRef.current;
+    if (!g) return;
+    g.position.y = 0;
+    g.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(g);
+    if (Number.isFinite(box.min.y)) {
+      g.position.y = -box.min.y;
+      g.updateMatrixWorld(true);
+    }
+  }, [basePlateGeometry, wallsGeometry, pocketFloorGeometry, feetGeometry, lipGeometry]);
 
   return (
     <group ref={meshRef} rotation={[-Math.PI / 2, 0, 0]}>

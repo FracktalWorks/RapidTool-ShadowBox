@@ -49,8 +49,6 @@ const stepConfigs: StepConfig[] = [
 ];
 const stepOrder = stepConfigs.map((c) => c.step);
 
-const DEFAULT_DESIGN_SETTINGS = { baseHeight: 5, wallThickness: 2, cutoutDepth: 15, chamferSize: 2, gridfinityBase: true };
-
 const VIEW_BUTTONS: { o: string; Icon: React.FC<{ className?: string }>; cls: string; title: string }[] = [
   { o: 'front', Icon: IconIsoFace,     cls: '',           title: 'Front View' },
   { o: 'back',  Icon: IconIsoFace,     cls: 'rotate-180', title: 'Back View' },
@@ -106,7 +104,7 @@ export const WorkflowShell: React.FC = () => {
   const {
     currentStep, setCurrentStep, projectName, setProjectName,
     isProcessing, processingMessage,
-    paperDetected, toolOutlines, layoutState, designSettings, resetAll,
+    paperDetected, toolOutlines, layoutState, resetAll,
   } = useAppStore();
   const logout = useAuthStore((s) => s.logout);
   const { theme, toggleTheme } = useTheme();
@@ -122,26 +120,7 @@ export const WorkflowShell: React.FC = () => {
     { isOpen: false, targetStep: null, incompleteSteps: [] }
   );
 
-  // ── Step completion / prerequisites (ported from Sidebar) ──────────────────
-  const getStepCompletion = useCallback((step: WorkflowStep): boolean => {
-    switch (step) {
-      case 'paper':  return paperDetected;
-      case 'tools':  return toolOutlines.length > 0;
-      case 'layout': return layoutState.shapes.length > 0;
-      case 'design': {
-        const hasElements = layoutState.shapes.length > 0;
-        const d = designSettings;
-        const changed = d.baseHeight !== DEFAULT_DESIGN_SETTINGS.baseHeight
-          || d.wallThickness !== DEFAULT_DESIGN_SETTINGS.wallThickness
-          || d.cutoutDepth !== DEFAULT_DESIGN_SETTINGS.cutoutDepth
-          || d.chamferSize !== DEFAULT_DESIGN_SETTINGS.chamferSize
-          || d.gridfinityBase !== DEFAULT_DESIGN_SETTINGS.gridfinityBase;
-        return hasElements && changed;
-      }
-      default: return false;
-    }
-  }, [paperDetected, toolOutlines.length, layoutState.shapes.length, designSettings]);
-
+  // ── Prerequisites (ported from Sidebar) ────────────────────────────────────
   const getIncompletePrerequisites = useCallback((step: WorkflowStep): StepConfig[] => {
     const incomplete: StepConfig[] = [];
     const targetIndex = stepOrder.indexOf(step);
@@ -255,7 +234,6 @@ export const WorkflowShell: React.FC = () => {
           <SidebarIconGroup direction="vertical" gap={8} className="p-2 flex-1">
             {stepConfigs.map((c) => {
               const active = c.step === currentStep;
-              const completed = getStepCompletion(c.step);
               return (
                 <SidebarIcon
                   key={c.step}
@@ -265,8 +243,6 @@ export const WorkflowShell: React.FC = () => {
                   active={active}
                   onClick={() => handleStepClick(c.step)}
                   size="md"
-                  badge={completed && !active ? '✓' : undefined}
-                  badgeVariant="success"
                 />
               );
             })}
