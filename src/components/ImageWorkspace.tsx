@@ -574,20 +574,13 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
 
     setIsTracing(true);
 
-    // Polygon area (shoelace) — used to tell whether a click actually grew the trace.
-    const polyArea = (p: Point2D[]) => {
-      let a = 0;
-      for (let i = 0; i < p.length; i++) { const j = (i + 1) % p.length; a += p[i].x * p[j].y - p[j].x * p[i].y; }
-      return Math.abs(a) / 2;
-    };
-
     // ADD the region under a positive click and UNION it into `existing`.
-    // Why not just re-run SAM with every click? Multi-point SAM keeps returning the
-    // dominant object (the tool body), so a click on a thin / attached / low-contrast
-    // part (depth rod, chrome jaw) never grows the trace — the dots feel "dead".
-    // Instead: (1) segment LOCALLY with only this click; (2) if that didn't grow the
-    // outline, grab the local region by EDGES with a small GrabCut box around the
-    // click — that's what reliably captures thin / low-saliency parts. Never shrinks.
+    // Segment LOCALLY with only this click (multi-point SAM keeps returning the
+    // dominant body, so a click on a missed part never grows). SAM masks are
+    // shape-coherent, so a no-op union just leaves the trace unchanged — we never
+    // synthesise a box/rectangle here (that produced the ugly square artifacts).
+    // For thin / low-contrast parts SAM can't segment, Box Select is the reliable
+    // edge-grab (the user draws the exact region).
     const addRegionAtClick = async (existing: Point2D[]): Promise<Point2D[]> => {
       let merged = existing;
       try {
@@ -595,15 +588,6 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
         if (r?.points && r.points.length >= 3) merged = unionPolygons(existing, r.points);
       } catch (e) { console.warn('SAM add-click failed:', e); }
       finally { setSamProgress(null); }
-
-      if (polyArea(merged) <= polyArea(existing) * 1.005) {
-        try {
-          const BOX = 120; // px box centred on the click for the local edge-grab
-          const box = { x: Math.round(point.x - BOX / 2), y: Math.round(point.y - BOX / 2), width: BOX, height: BOX };
-          const gc = await grabCutInit(imageUrl, box);
-          if (gc?.points && gc.points.length >= 3) merged = unionPolygons(existing, gc.points);
-        } catch (e) { console.warn('Local edge-grab fallback failed:', e); }
-      }
       return merged;
     };
 
