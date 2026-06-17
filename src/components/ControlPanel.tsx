@@ -30,6 +30,7 @@ import {
   FileText,
   Sparkles,
   Plus,
+  Undo2,
 } from "lucide-react";
 
 import { useAppStore } from "../stores";
@@ -424,7 +425,11 @@ const ToolsStepPanel: React.FC = () => {
     pixelsPerMm,
     paperCorners,
     snapToPill,
+    refineHistory,
+    undoRefine,
   } = useAppStore();
+
+  const canUndoRefine = !!(selectedOutlineId && (refineHistory[selectedOutlineId]?.length ?? 0) > 0);
 
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const [autoDetectDone, setAutoDetectDone] = useState(false);
@@ -756,6 +761,18 @@ const ToolsStepPanel: React.FC = () => {
           </div>
         )}
 
+        {/* Undo last refine edit on the selected tool (revert a bad click) */}
+        {canUndoRefine && (
+          <button
+            onClick={() => selectedOutlineId && undoRefine(selectedOutlineId)}
+            className="w-full flex items-center justify-center gap-1.5 h-8 rounded-lg border border-[hsl(var(--border))] text-xs font-medium text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] hover:border-[hsl(var(--accent)/0.4)] tech-transition"
+            title="Undo the last add/remove click on the selected tool"
+          >
+            <Undo2 className="w-3.5 h-3.5" />
+            Undo last edit
+          </button>
+        )}
+
         {/* Tool List */}
         <div className="space-y-1.5">
           <label className="text-[11px] font-semibold text-[hsl(var(--muted-foreground))] uppercase" style={{ letterSpacing: '0.08em' }}>
@@ -939,22 +956,13 @@ const ExportStepPanel: React.FC = () => {
       if (exportFormat === "svg") {
         downloadSVG(outlinesToExport, pixelsPerMm, "tooltrace-export.svg");
       } else {
-        const { generateExportMesh } = await import("./ExportWorkspace");
-        const { STLExporter } = await import("three-stdlib");
+        const { generateExportMesh, buildManifoldStlBlob } = await import("./ExportWorkspace");
         const THREE = await import("three");
 
-        const mesh = generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings);
+        // Apply clearance via the mesh generator (offsetMm) for parity with the preview.
+        const mesh = generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings, clearanceValue);
+        const blob = await buildManifoldStlBlob(mesh);
 
-        const exporter = new STLExporter();
-        const scene = new THREE.Scene();
-        scene.add(mesh);
-
-        const stlData = exporter.parse(scene, { binary: true });
-
-        const arrayBuffer = new ArrayBuffer(stlData.byteLength);
-        new Uint8Array(arrayBuffer).set(new Uint8Array(stlData.buffer, stlData.byteOffset, stlData.byteLength));
-
-        const blob = new Blob([arrayBuffer], { type: 'application/sla' });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;

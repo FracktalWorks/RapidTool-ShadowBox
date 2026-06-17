@@ -100,6 +100,10 @@ export interface AppState {
   updateToolOutlineRefined: (id: string, points: Point2D[], samClicks: { x: number; y: number; label: number }[]) => void;
   removeToolOutline: (id: string) => void;
   selectOutline: (id: string | null) => void;
+
+  // Refine undo — transient per-tool geometry snapshots so a bad click can be reverted.
+  refineHistory: Record<string, ToolOutline[]>;
+  undoRefine: (id: string) => void;
   snapToPill: (id: string) => void;
   
   // Clearance/Offset
@@ -191,10 +195,11 @@ const initialState = {
   pixelsPerMm: null,
   toolOutlines: [],
   selectedOutlineId: null,
+  refineHistory: {} as Record<string, ToolOutline[]>,
   clearanceValue: 0.5,
   activeTool: 'box' as const,
   refineBrush: 12,
-  exportFormat: 'svg' as const,
+  exportFormat: 'stl' as const,
   layoutState: DEFAULT_LAYOUT_STATE,
   designSettings: DEFAULT_DESIGN_SETTINGS,
   isProcessing: false,
@@ -351,7 +356,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateToolOutlineRefined: (id, points, samClicks) => set((state) => {
     const outline = state.toolOutlines.find(o => o.id === id);
     if (!outline) return state;
-    
+
+    // Snapshot the pre-update outline so this refine click can be undone (cap 25).
+    const prevHist = state.refineHistory[id] ?? [];
+    const refineHistory = { ...state.refineHistory, [id]: [...prevHist, outline].slice(-25) };
+
     const smoothedPoints = smoothContour(points, 1.5, 0); // RDP-only: keep SAM's sharp edges
 
     let regularizedPoints: Point2D[] | undefined;
@@ -376,16 +385,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     const areaInMm2 = state.pixelsPerMm ? area / (state.pixelsPerMm * state.pixelsPerMm) : undefined;
     
     return {
+      refineHistory,
       toolOutlines: state.toolOutlines.map((o) =>
         o.id === id ? { ...o, points, smoothedPoints, regularizedPoints, boundingBox, area, areaInMm2, samClicks } : o
       ),
     };
   }),
-  
-  removeToolOutline: (id) => set((state) => ({
-    toolOutlines: state.toolOutlines.filter((o) => o.id !== id),
-    selectedOutlineId: state.selectedOutlineId === id ? null : state.selectedOutlineId,
-  })),
+
+  // Revert the selected tool to the state before its last refine click.
+  undoRefine: (id) => set((state) => {
+    const hist = state.refineHistory[id];
+    if (!hist || hist.length === 0) return state;
+    const prev = hist[hist.length - 1];
+    return {
+      refineHistory: { ...state.refineHistory, [id]: hist.slice(0, -1) },
+      toolOutlines: state.toolOutlines.map((o) => (o.id === id ? prev : o)),
+    };
+  }),
+
+  removeToolOutline: (id) => set((state) => {
+    const { [id]: _drop, ...refineHistory } = state.refineHistory;
+    return {
+      refineHistory,
+      toolOutlines: state.toolOutlines.filter((o) => o.id !== id),
+      selectedOutlineId: state.selectedOutlineId === id ? null : state.selectedOutlineId,
+    };
+  }),
   
   selectOutline: (id) => set({ selectedOutlineId: id }),
 

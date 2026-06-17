@@ -14,6 +14,7 @@ import { OrbitControls, Grid, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { STLExporter } from 'three-stdlib';
+import { repairMeshWithManifold } from '@rapidtool/cad-core';
 import { useAppStore, type LayoutShape, type DesignSettings } from '../stores';
 import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/gridfinityGeometry';
 import { offsetPolygon } from '../lib/geometry';
@@ -318,6 +319,37 @@ function createPocketFloorWithCutouts(
 // ============================================================================
 // 3D Export Mesh Generation
 // ============================================================================
+
+/**
+ * Build a print-ready, watertight STL blob from an export mesh.
+ *
+ * The mesh is the union of several extruded parts (base, walls, pocket floor with
+ * CSG cutouts, Gridfinity feet/lip). That raw boolean output can have coincident
+ * faces / open seams that make slicers complain. We run it through Manifold3D
+ * (cad-core) to guarantee a single closed, manifold solid before serialising —
+ * the contract for a clean Gridfinity print. Falls back to the raw geometry only
+ * if the repair can't run, so an export never fails outright.
+ */
+export async function buildManifoldStlBlob(mesh: THREE.Mesh): Promise<Blob> {
+  let geometry: THREE.BufferGeometry = mesh.geometry;
+  try {
+    const result = await repairMeshWithManifold(geometry);
+    if (result.success && result.geometry) geometry = result.geometry;
+    else console.warn('Manifold repair did not return geometry; exporting raw mesh.');
+  } catch (err) {
+    console.warn('Manifold repair unavailable; exporting raw mesh:', err);
+  }
+
+  const exporter = new STLExporter();
+  const scene = new THREE.Scene();
+  scene.add(new THREE.Mesh(geometry));
+  const stlData = exporter.parse(scene, { binary: true });
+
+  const arrayBuffer = new ArrayBuffer(stlData.byteLength);
+  new Uint8Array(arrayBuffer).set(new Uint8Array(stlData.buffer, stlData.byteOffset, stlData.byteLength));
+  if (geometry !== mesh.geometry) geometry.dispose();
+  return new Blob([arrayBuffer], { type: 'application/sla' });
+}
 
 /**
  * Generate a combined mesh for STL export
@@ -897,22 +929,10 @@ export const ExportWorkspace: React.FC = () => {
         
         downloadSVG(outlinesToExport, pixelsPerMm, 'tooltrace-export.svg');
       } else {
-        // Export STL using the 3D mesh
+        // Export a watertight, manifold STL (repaired via Manifold3D).
         const mesh = generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings, clearanceValue);
-        
-        // Use STLExporter from three-stdlib
-        const exporter = new STLExporter();
-        const scene = new THREE.Scene();
-        scene.add(mesh);
-        
-        const stlData = exporter.parse(scene, { binary: true });
-        
-        // Convert to ArrayBuffer
-        const arrayBuffer = new ArrayBuffer(stlData.byteLength);
-        new Uint8Array(arrayBuffer).set(new Uint8Array(stlData.buffer, stlData.byteOffset, stlData.byteLength));
-        
-        // Download the file
-        const blob = new Blob([arrayBuffer], { type: 'application/sla' });
+        const blob = await buildManifoldStlBlob(mesh);
+
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
@@ -921,7 +941,7 @@ export const ExportWorkspace: React.FC = () => {
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
-        
+
         // Clean up
         mesh.geometry.dispose();
         if (mesh.material instanceof THREE.Material) {
