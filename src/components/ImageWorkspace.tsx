@@ -574,17 +574,16 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
 
     setIsTracing(true);
 
-    // ADD the region under a positive click and UNION it into `existing`.
-    // Segment LOCALLY with only this click (multi-point SAM keeps returning the
-    // dominant body, so a click on a missed part never grows). SAM masks are
-    // shape-coherent, so a no-op union just leaves the trace unchanged — we never
-    // synthesise a box/rectangle here (that produced the ugly square artifacts).
-    // For thin / low-contrast parts SAM can't segment, Box Select is the reliable
-    // edge-grab (the user draws the exact region).
-    const addRegionAtClick = async (existing: Point2D[]): Promise<Point2D[]> => {
+    // ADD: re-segment with the ACCUMULATED positive clicks (SAM 2 is designed to
+    // grow ONE coherent mask from multiple points), then UNION it into `existing`.
+    // Single-click-per-call was wrong: each call returned a different partial blob,
+    // and unioning those produced a jagged staircase. Accumulating lets the mask
+    // converge on the region (e.g. an orange handle) as you keep clicking it.
+    // (Distinct-colour or thin parts that SAM still can't grow → use Box Select.)
+    const addRegionAtClick = async (existing: Point2D[], clicks: { x: number; y: number; label: number }[]): Promise<Point2D[]> => {
       let merged = existing;
       try {
-        const r = await samSegmentPoint(imageUrl, [{ x: point.x, y: point.y, label: 1 }], { paperCorners: paperCorners || undefined, onProgress: setSamProgress });
+        const r = await samSegmentPoint(imageUrl, clicks, { paperCorners: paperCorners || undefined, onProgress: setSamProgress });
         if (r?.points && r.points.length >= 3) merged = unionPolygons(existing, r.points);
       } catch (e) { console.warn('SAM add-click failed:', e); }
       finally { setSamProgress(null); }
@@ -610,7 +609,7 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
             const currentClicks = outline.samClicks ? [...outline.samClicks] : [];
             currentClicks.push({ x: point.x, y: point.y, label });
             const existing = outline.smoothedPoints && outline.smoothedPoints.length >= 3 ? outline.smoothedPoints : outline.points;
-            const merged = label === 1 ? await addRegionAtClick(existing) : await removeWithClicks(existing, currentClicks);
+            const merged = label === 1 ? await addRegionAtClick(existing, currentClicks) : await removeWithClicks(existing, currentClicks);
             updateToolOutlineRefined(selectedOutlineId, merged, currentClicks);
           }
         }
@@ -649,7 +648,7 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
           const currentClicks = hit.samClicks ? [...hit.samClicks] : [];
           currentClicks.push({ x: point.x, y: point.y, label });
           const existing = hit.smoothedPoints && hit.smoothedPoints.length >= 3 ? hit.smoothedPoints : hit.points;
-          const merged = label === 1 ? await addRegionAtClick(existing) : await removeWithClicks(existing, currentClicks);
+          const merged = label === 1 ? await addRegionAtClick(existing, currentClicks) : await removeWithClicks(existing, currentClicks);
           updateToolOutlineRefined(hit.id, merged, currentClicks);
         } else {
           // New tool creation (click on empty paper).
