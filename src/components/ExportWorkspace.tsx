@@ -14,7 +14,6 @@ import { OrbitControls, Grid, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { STLExporter } from 'three-stdlib';
-import { repairMeshWithManifold } from '@rapidtool/cad-core';
 import { useAppStore, type LayoutShape, type DesignSettings } from '../stores';
 import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/gridfinityGeometry';
 import { offsetPolygon } from '../lib/geometry';
@@ -333,6 +332,10 @@ function createPocketFloorWithCutouts(
 export async function buildManifoldStlBlob(mesh: THREE.Mesh): Promise<Blob> {
   let geometry: THREE.BufferGeometry = mesh.geometry;
   try {
+    // Lazy-load Manifold3D only at export time. Importing it at module scope pulls
+    // its WASM into the initial graph and makes Vite re-optimize deps mid-session,
+    // which drops the dev server's worker connections. On-demand keeps startup clean.
+    const { repairMeshWithManifold } = await import('@rapidtool/cad-core');
     const result = await repairMeshWithManifold(geometry);
     if (result.success && result.geometry) geometry = result.geometry;
     else console.warn('Manifold repair did not return geometry; exporting raw mesh.');
