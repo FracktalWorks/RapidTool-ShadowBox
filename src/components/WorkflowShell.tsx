@@ -250,7 +250,7 @@ export const WorkflowShell: React.FC = () => {
 
       {/* ── Main content ─────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left icon rail — steps (top) + account (bottom), matching Fixture's VerticalToolbar */}
+        {/* Left icon rail — workflow steps */}
         <aside className="w-14 flex-shrink-0 border-r border-[hsl(var(--border)/0.5)] tech-glass flex flex-col" role="toolbar" aria-label="Workflow steps">
           <SidebarIconGroup direction="vertical" gap={8} className="p-2 flex-1">
             {stepConfigs.map((c) => {
@@ -271,15 +271,6 @@ export const WorkflowShell: React.FC = () => {
               );
             })}
           </SidebarIconGroup>
-          <div className="p-3 border-t border-[hsl(var(--border)/0.5)] flex justify-center">
-            <SidebarIcon
-              icon={<UserCircle2 className="w-4 h-4 opacity-60" />}
-              label="Account Settings"
-              tooltip="Account Settings"
-              onClick={() => setIsAccountOpen(true)}
-              size="sm"
-            />
-          </div>
         </aside>
 
         {/* Context Options panel */}
@@ -325,10 +316,18 @@ export const WorkflowShell: React.FC = () => {
         </aside>
       </div>
 
-      {/* ── Flow steps bar — horizontal workflow stepper (mirrors Fixture's bottom bar).
-           Indented past the w-14 rail so the icons sit under the panel, clear of the
-           account icon's column. ── */}
-      <div className="h-12 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center pl-16 pr-3">
+      {/* ── Bottom bar — account (far left, in the rail column) + horizontal flow steps,
+           both on the same row. ── */}
+      <div className="h-12 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center pr-3">
+        <div className="w-14 flex items-center justify-center shrink-0">
+          <SidebarIcon
+            icon={<UserCircle2 className="w-4 h-4 opacity-60" />}
+            label="Account Settings"
+            tooltip="Account Settings"
+            onClick={() => setIsAccountOpen(true)}
+            size="sm"
+          />
+        </div>
         <SidebarIconGroup direction="horizontal" gap={4} align="center">
           {stepConfigs.map((c, i) => {
             const active = c.step === currentStep;
