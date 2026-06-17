@@ -36,6 +36,11 @@
   --accent: 27 96% 61%;
   --accent-foreground: 210 40% 98%;
 
+  /* cad-ui SidebarIcon hover — orange (accent), matching RapidTool Fixture.
+     Active state stays primary/blue (hardcoded in the component). */
+  --sidebar-icon-hover-bg: hsl(var(--accent) / 0.12);
+  --sidebar-icon-hover-fg: hsl(var(--accent));
+
   /* Border Radius */
   --radius: 0.75rem;
 

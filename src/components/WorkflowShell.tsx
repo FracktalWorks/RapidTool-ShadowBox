@@ -21,16 +21,17 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   FileText, Wrench, LayoutGrid, Box, Download,
-  RotateCcw, ChevronLeft, ChevronRight, User, LogOut,
+  RotateCcw, ChevronLeft, ChevronRight, UserCircle2,
   AlertCircle, ArrowRight, X,
 } from 'lucide-react';
-import { RapidToolLogo, ThemeToggle, VerticalToolbar, type ToolItem, LoadingOverlay } from '@rapidtool/cad-ui';
+import { RapidToolLogo, ThemeToggle, SidebarIcon, SidebarIconGroup, LoadingOverlay } from '@rapidtool/cad-ui';
 import { IconIsoFace, IconIsoTop, IconIsoLeftFace, IconIsoCorner } from './icons';
 import { useAppStore, type WorkflowStep } from '../stores';
 import { useAuthStore } from '../stores/authStore';
 import { useTheme } from '../hooks';
 import { ControlPanel } from './ControlPanel';
 import { PropertiesPanel } from './PropertiesPanel';
+import { AccountSettings } from './AccountSettings';
 import { ImageWorkspace } from './ImageWorkspace';
 import { LayoutWorkspace } from './LayoutWorkspace';
 import { DesignWorkspace } from './DesignWorkspace';
@@ -100,37 +101,6 @@ const PrerequisitesNotification: React.FC<{
   );
 };
 
-// ── User profile (ported from Sidebar) ───────────────────────────────────────
-const UserProfile: React.FC = () => {
-  const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
-  const displayName = user?.name || user?.email?.split('@')[0] || 'Guest';
-  const initials = (() => {
-    const src = (user?.name || user?.email || '').trim();
-    if (!src) return null;
-    const parts = src.split(/[\s@.]+/).filter(Boolean);
-    return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || src[0].toUpperCase();
-  })();
-  return (
-    <div className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg tech-transition border border-[hsl(var(--border)/0.5)] bg-[hsl(var(--muted)/0.3)] hover:bg-[hsl(var(--muted)/0.6)]" title={user?.email || 'Not signed in'}>
-      <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 text-[10px] font-semibold"
-        style={initials ? { background: 'hsl(var(--primary))', color: 'hsl(var(--primary-foreground))' } : { background: 'hsl(var(--muted))', border: '1px dashed hsl(var(--border))' }}>
-        {initials ?? <User className="w-3 h-3 text-[hsl(var(--muted-foreground))]" />}
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-[11px] font-medium text-[hsl(var(--foreground))] truncate">{displayName}</p>
-        <p className="text-[10px] text-[hsl(var(--muted-foreground)/0.7)] truncate">{user?.email || 'Not signed in'}</p>
-      </div>
-      {user && (
-        <button type="button" onClick={() => { void logout(); }} title="Sign out"
-          className="shrink-0 p-1 rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))] hover:bg-[hsl(var(--destructive)/0.1)] tech-transition">
-          <LogOut className="w-3.5 h-3.5" />
-        </button>
-      )}
-    </div>
-  );
-};
-
 // ── Shell ─────────────────────────────────────────────────────────────────────
 export const WorkflowShell: React.FC = () => {
   const {
@@ -138,7 +108,9 @@ export const WorkflowShell: React.FC = () => {
     isProcessing, processingMessage,
     paperDetected, toolOutlines, layoutState, designSettings, resetAll,
   } = useAppStore();
+  const logout = useAuthStore((s) => s.logout);
   const { theme, toggleTheme } = useTheme();
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
 
   const [isContextCollapsed, setIsContextCollapsed] = useState(false);
   const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
@@ -212,24 +184,7 @@ export const WorkflowShell: React.FC = () => {
   const startEditingName = useCallback(() => { setNameDraft(projectName); setIsEditingName(true); setTimeout(() => nameInputRef.current?.select(), 0); }, [projectName]);
   const saveName = useCallback(() => { const t = nameDraft.trim(); if (t) setProjectName(t); setIsEditingName(false); }, [nameDraft, setProjectName]);
 
-  // ── Rail items + custom button (active highlight + green completion badge) ──
-  const railItems: ToolItem<WorkflowStep>[] = stepConfigs.map((c) => ({ id: c.step, icon: c.icon, label: c.label, tooltip: c.label }));
-  const renderRailButton = (item: ToolItem<WorkflowStep>, isActive: boolean, onClick: () => void) => {
-    const completed = getStepCompletion(item.id);
-    return (
-      <button onClick={onClick} title={item.tooltip} aria-pressed={isActive}
-        className={`relative w-10 h-10 flex items-center justify-center rounded-md tech-transition border ${
-          isActive
-            ? 'bg-[hsl(var(--primary)/0.1)] text-[hsl(var(--primary))] border-[hsl(var(--primary)/0.25)]'
-            : 'text-[hsl(var(--muted-foreground))] border-transparent hover:bg-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))]'
-        }`}>
-        {item.icon}
-        {completed && !isActive && (
-          <span className="absolute -top-1 -right-1 bg-green-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center w-4 h-4">✓</span>
-        )}
-      </button>
-    );
-  };
+  const handleLogout = useCallback(async () => { await logout(); setIsAccountOpen(false); }, [logout]);
 
   // ── Viewport ───────────────────────────────────────────────────────────────
   const renderWorkspace = () => {
@@ -295,15 +250,36 @@ export const WorkflowShell: React.FC = () => {
 
       {/* ── Main content ─────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left icon rail */}
-        <aside className="w-14 flex-shrink-0 border-r border-[hsl(var(--border)/0.5)] tech-glass flex flex-col items-center">
-          <VerticalToolbar<WorkflowStep>
-            items={railItems}
-            activeId={currentStep}
-            onSelect={handleStepClick}
-            renderButton={renderRailButton}
-            ariaLabel="Workflow steps"
-          />
+        {/* Left icon rail — steps (top) + account (bottom), matching Fixture's VerticalToolbar */}
+        <aside className="w-14 flex-shrink-0 border-r border-[hsl(var(--border)/0.5)] tech-glass flex flex-col" role="toolbar" aria-label="Workflow steps">
+          <SidebarIconGroup direction="vertical" gap={8} className="p-2 flex-1">
+            {stepConfigs.map((c) => {
+              const active = c.step === currentStep;
+              const completed = getStepCompletion(c.step);
+              return (
+                <SidebarIcon
+                  key={c.step}
+                  icon={<span className={active ? 'opacity-100' : 'opacity-60'}>{c.icon}</span>}
+                  label={c.label}
+                  tooltip={c.label}
+                  active={active}
+                  onClick={() => handleStepClick(c.step)}
+                  size="md"
+                  badge={completed && !active ? '✓' : undefined}
+                  badgeVariant="success"
+                />
+              );
+            })}
+          </SidebarIconGroup>
+          <div className="p-3 border-t border-[hsl(var(--border)/0.5)] flex justify-center">
+            <SidebarIcon
+              icon={<UserCircle2 className="w-4 h-4 opacity-60" />}
+              label="Account Settings"
+              tooltip="Account Settings"
+              onClick={() => setIsAccountOpen(true)}
+              size="sm"
+            />
+          </div>
         </aside>
 
         {/* Context Options panel */}
@@ -342,16 +318,38 @@ export const WorkflowShell: React.FC = () => {
             </button>
           </div>
           {!isPropertiesCollapsed && (
-            <>
-              <div className="p-4 flex-1 overflow-auto">
-                <ErrorBoundary><PropertiesPanel /></ErrorBoundary>
-              </div>
-              <div className="p-2 border-t border-[hsl(var(--border)/0.5)]">
-                <UserProfile />
-              </div>
-            </>
+            <div className="p-4 flex-1 overflow-auto">
+              <ErrorBoundary><PropertiesPanel /></ErrorBoundary>
+            </div>
           )}
         </aside>
+      </div>
+
+      {/* ── Flow steps bar — horizontal workflow stepper (mirrors Fixture's bottom bar) ── */}
+      <div className="h-12 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center px-3">
+        <SidebarIconGroup direction="horizontal" gap={6} align="center">
+          {stepConfigs.map((c, i) => {
+            const active = c.step === currentStep;
+            const completed = getStepCompletion(c.step);
+            return (
+              <React.Fragment key={c.step}>
+                <SidebarIcon
+                  icon={c.icon}
+                  label={c.label}
+                  tooltip={`${i + 1}. ${c.label}`}
+                  active={active}
+                  onClick={() => handleStepClick(c.step)}
+                  size="sm"
+                  badge={completed && !active ? '✓' : undefined}
+                  badgeVariant="success"
+                />
+                {i < stepConfigs.length - 1 && (
+                  <span className="text-[hsl(var(--border))] text-xs select-none">›</span>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </SidebarIconGroup>
       </div>
 
       {/* ── Footer ───────────────────────────────────────────────────────── */}
@@ -373,6 +371,8 @@ export const WorkflowShell: React.FC = () => {
         incompleteSteps={prereqModal.incompleteSteps}
         onGoToStep={setCurrentStep}
       />
+
+      <AccountSettings open={isAccountOpen} onOpenChange={setIsAccountOpen} onLogout={handleLogout} />
     </div>
   );
 };
