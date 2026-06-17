@@ -573,6 +573,50 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
     if (!imageUrl || isTracing) return;
 
     setIsTracing(true);
+
+    // Polygon area (shoelace) — used to tell whether a click actually grew the trace.
+    const polyArea = (p: Point2D[]) => {
+      let a = 0;
+      for (let i = 0; i < p.length; i++) { const j = (i + 1) % p.length; a += p[i].x * p[j].y - p[j].x * p[i].y; }
+      return Math.abs(a) / 2;
+    };
+
+    // ADD the region under a positive click and UNION it into `existing`.
+    // Why not just re-run SAM with every click? Multi-point SAM keeps returning the
+    // dominant object (the tool body), so a click on a thin / attached / low-contrast
+    // part (depth rod, chrome jaw) never grows the trace — the dots feel "dead".
+    // Instead: (1) segment LOCALLY with only this click; (2) if that didn't grow the
+    // outline, grab the local region by EDGES with a small GrabCut box around the
+    // click — that's what reliably captures thin / low-saliency parts. Never shrinks.
+    const addRegionAtClick = async (existing: Point2D[]): Promise<Point2D[]> => {
+      let merged = existing;
+      try {
+        const r = await samSegmentPoint(imageUrl, [{ x: point.x, y: point.y, label: 1 }], { paperCorners: paperCorners || undefined, onProgress: setSamProgress });
+        if (r?.points && r.points.length >= 3) merged = unionPolygons(existing, r.points);
+      } catch (e) { console.warn('SAM add-click failed:', e); }
+      finally { setSamProgress(null); }
+
+      if (polyArea(merged) <= polyArea(existing) * 1.005) {
+        try {
+          const BOX = 120; // px box centred on the click for the local edge-grab
+          const box = { x: Math.round(point.x - BOX / 2), y: Math.round(point.y - BOX / 2), width: BOX, height: BOX };
+          const gc = await grabCutInit(imageUrl, box);
+          if (gc?.points && gc.points.length >= 3) merged = unionPolygons(existing, gc.points);
+        } catch (e) { console.warn('Local edge-grab fallback failed:', e); }
+      }
+      return merged;
+    };
+
+    // REMOVE (negative click): re-segment with the full click set so the negative
+    // point carves the region out; keep the tool if SAM returns nothing.
+    const removeWithClicks = async (existing: Point2D[], clicks: { x: number; y: number; label: number }[]): Promise<Point2D[]> => {
+      let result = null;
+      try { result = await samSegmentPoint(imageUrl, clicks, { paperCorners: paperCorners || undefined, onProgress: setSamProgress }); }
+      catch (samErr) { console.warn('SAM remove failed:', samErr); }
+      finally { setSamProgress(null); }
+      return result?.points && result.points.length >= 3 ? result.points : existing;
+    };
+
     try {
       if (activeTool === 'refine') {
         // Refinement of an existing tool
@@ -581,24 +625,9 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
           if (outline) {
             const currentClicks = outline.samClicks ? [...outline.samClicks] : [];
             currentClicks.push({ x: point.x, y: point.y, label });
-
-            let result = null;
-            try {
-              result = await samSegmentPoint(imageUrl, currentClicks, { paperCorners: paperCorners || undefined, onProgress: setSamProgress });
-            } catch (samErr) {
-              console.warn('SAM refinement failed:', samErr);
-            } finally {
-              setSamProgress(null);
-            }
-
-            if (result) {
-              // ADD (label 1): UNION the segmented region into the existing outline
-              // so a missed part (e.g. caliper jaw) is appended without losing the
-              // body. REMOVE (label 0): take the re-segmentation as-is.
-              const existing = outline.smoothedPoints && outline.smoothedPoints.length >= 3 ? outline.smoothedPoints : outline.points;
-              const merged = label === 1 ? unionPolygons(existing, result.points) : result.points;
-              updateToolOutlineRefined(selectedOutlineId, merged, currentClicks);
-            }
+            const existing = outline.smoothedPoints && outline.smoothedPoints.length >= 3 ? outline.smoothedPoints : outline.points;
+            const merged = label === 1 ? await addRegionAtClick(existing) : await removeWithClicks(existing, currentClicks);
+            updateToolOutlineRefined(selectedOutlineId, merged, currentClicks);
           }
         }
       } else {
@@ -635,20 +664,9 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
           selectOutline(hit.id);
           const currentClicks = hit.samClicks ? [...hit.samClicks] : [];
           currentClicks.push({ x: point.x, y: point.y, label });
-          let result = null;
-          try {
-            result = await samSegmentPoint(imageUrl, currentClicks, { paperCorners: paperCorners || undefined, onProgress: setSamProgress });
-          } catch (samErr) {
-            console.warn('SAM refine failed:', samErr);
-          } finally {
-            setSamProgress(null);
-          }
-          if (result) {
-            // UNION the new region into the existing outline (don't replace/lose it).
-            const existing = hit.smoothedPoints && hit.smoothedPoints.length >= 3 ? hit.smoothedPoints : hit.points;
-            const merged = label === 1 ? unionPolygons(existing, result.points) : result.points;
-            updateToolOutlineRefined(hit.id, merged, currentClicks);
-          }
+          const existing = hit.smoothedPoints && hit.smoothedPoints.length >= 3 ? hit.smoothedPoints : hit.points;
+          const merged = label === 1 ? await addRegionAtClick(existing) : await removeWithClicks(existing, currentClicks);
+          updateToolOutlineRefined(hit.id, merged, currentClicks);
         } else {
           // New tool creation (click on empty paper).
           const initialClicks = [{ x: point.x, y: point.y, label: 1 }];
