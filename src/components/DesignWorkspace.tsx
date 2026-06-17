@@ -10,10 +10,10 @@
 import React, { useRef, useMemo, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { ThreeElements } from '@react-three/fiber';
-import { OrbitControls, Environment } from '@react-three/drei';
+import { OrbitControls, Environment, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
-import { ScalableGrid, ViewCube, NavigationHelp } from '@rapidtool/cad-ui';
+import { ScalableGrid, NavigationHelp } from '@rapidtool/cad-ui';
 import { useAppStore, type LayoutShape, type DesignSettings } from '../stores';
 import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/gridfinityGeometry';
 import { offsetPolygon } from '../lib/geometry';
@@ -675,6 +675,11 @@ const Scene: React.FC<SceneProps> = ({ layoutState, toolOutlines, pixelsPerMm, s
         maxDistance={500}
         maxPolarAngle={Math.PI / 2 + 0.1}
       />
+
+      {/* Axis-triad gizmo — same config as RapidTool-Fixture (3DScene.tsx) */}
+      <GizmoHelper alignment="top-right" margin={[80, 80]}>
+        <GizmoViewport axisColors={['#ff4060', '#40ff60', '#4080ff']} labels={['X', 'Z', 'Y']} labelColor="white" />
+      </GizmoHelper>
     </>
   );
 };
@@ -739,13 +744,8 @@ export const DesignWorkspace: React.FC = () => {
         />
       </Canvas>
 
-      {/* ViewCube — orientation widget (dispatches to the Scene camera handler) */}
-      <div className="absolute top-4 right-4 z-10">
-        <ViewCube size={96} onViewChange={(o) => window.dispatchEvent(new CustomEvent('viewer-orientation', { detail: o }))} />
-      </div>
-
-      {/* Navigation help (shared cad-ui overlay) */}
-      <NavigationHelp storageKey="tooltrace-nav" position="bottom-left" />
+      {/* Navigation help (shared cad-ui overlay, same as Fixture) */}
+      <NavigationHelp storageKey="fixture-view-nav-tooltip-dismissed" />
 
       {/* Design Info */}
       <div className="absolute top-4 left-4 flex items-center gap-3 bg-[hsl(var(--card))/90] backdrop-blur-sm border border-[hsl(var(--border))] rounded-lg px-3 py-1.5 shadow-sm">
