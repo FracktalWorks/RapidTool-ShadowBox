@@ -325,8 +325,10 @@ export const WorkflowShell: React.FC = () => {
         </aside>
       </div>
 
-      {/* ── Flow steps bar — horizontal workflow stepper (mirrors Fixture's bottom bar) ── */}
-      <div className="h-12 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center px-3">
+      {/* ── Flow steps bar — horizontal workflow stepper (mirrors Fixture's bottom bar).
+           Indented past the w-14 rail so the icons sit under the panel, clear of the
+           account icon's column. ── */}
+      <div className="h-12 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center pl-16 pr-3">
         <SidebarIconGroup direction="horizontal" gap={4} align="center">
           {stepConfigs.map((c, i) => {
             const active = c.step === currentStep;
