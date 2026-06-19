@@ -1461,9 +1461,6 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
         cv.drawContours(tempMask, cVec, 0, new cv.Scalar(255), -1);
         cVec.delete();
 
-        let splitContours: any = null;
-        let chosenKSize = 0;
-        
         const splitKernelSizes = [11, 19, 27, 35, 43, 51].map(k => {
           const s = Math.round(k * scale);
           const ks = s % 2 === 0 ? s + 1 : s;
@@ -1482,62 +1479,42 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
           cv.findContours(tempEroded, subContours, subHier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
           let validSubCount = 0;
+          const tempCands: { contour: any; area: number }[] = [];
           for (let j = 0; j < subContours.size(); j++) {
             const subC = subContours.get(j);
-            if (cv.contourArea(subC) > Math.max(200 * scale * scale, minArea * 0.2)) {
+            const subArea = cv.contourArea(subC);
+            if (subArea > Math.max(200 * scale * scale, minArea * 0.2)) {
               validSubCount++;
+              tempCands.push({ contour: subC, area: subArea });
+            } else {
+              subC.delete();
             }
-            subC.delete();
           }
 
           if (validSubCount >= 2) {
-            splitContours = subContours;
-            chosenKSize = kSize;
-            subHier.delete();
-            tempEroded.delete();
+            console.log(`proposeRegions: split mega-blob [x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}] into ${validSubCount} parts using kSize=${kSize}`);
+            for (const cand of tempCands) {
+              const proposal = buildProposalFromContour(cand.contour, cand.area, rows, cols, combined);
+              if (proposal) {
+                const minBboxDim = Math.min(proposal.bbox.w, proposal.bbox.h);
+                const maxBboxDim = Math.max(proposal.bbox.w, proposal.bbox.h);
+                const minDimThresh = Math.max(8, Math.round(20 * scale));
+                const maxDimThresh = Math.max(20, Math.round(50 * scale));
+                if (minBboxDim >= minDimThresh && maxBboxDim >= maxDimThresh) {
+                  proposals.push(proposal);
+                  addedAny = true;
+                }
+              }
+              cand.contour.delete();
+            }
+            deleteMats(subContours, subHier, tempEroded);
             break;
           } else {
+            for (const cand of tempCands) {
+              cand.contour.delete();
+            }
             deleteMats(subContours, subHier, tempEroded);
           }
-        }
-
-        if (splitContours) {
-          for (let j = 0; j < splitContours.size(); j++) {
-            const subC = splitContours.get(j);
-            if (cv.contourArea(subC) > Math.max(200 * scale * scale, minArea * 0.2)) {
-              const subMask = cv.Mat.zeros(rows, cols, cv.CV_8U);
-              const subVec = new cv.MatVector();
-              subVec.push_back(subC);
-              cv.drawContours(subMask, subVec, 0, new cv.Scalar(255), -1);
-
-              const dilateKernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(chosenKSize, chosenKSize));
-              cv.dilate(subMask, subMask, dilateKernel);
-              dilateKernel.delete();
-
-              const resContours = new cv.MatVector();
-              const resHier = new cv.Mat();
-              cv.findContours(subMask, resContours, resHier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-              if (resContours.size() > 0) {
-                const restoredC = resContours.get(0);
-                const restoredArea = cv.contourArea(restoredC);
-                const proposal = buildProposalFromContour(restoredC, restoredArea, rows, cols, combined);
-                if (proposal) {
-                  const minBboxDim = Math.min(proposal.bbox.w, proposal.bbox.h);
-                  const maxBboxDim = Math.max(proposal.bbox.w, proposal.bbox.h);
-                  const minDimThresh = Math.max(8, Math.round(20 * scale));
-                  const maxDimThresh = Math.max(20, Math.round(50 * scale));
-                  if (minBboxDim >= minDimThresh && maxBboxDim >= maxDimThresh) {
-                    proposals.push(proposal);
-                    addedAny = true;
-                  }
-                }
-                restoredC.delete();
-              }
-              deleteMats(subMask, subVec, resContours, resHier);
-            }
-            subC.delete();
-          }
-          splitContours.delete();
         }
         tempMask.delete();
       } catch (splitErr: any) {

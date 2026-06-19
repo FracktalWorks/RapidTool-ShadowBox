@@ -10,7 +10,13 @@
 import React, { useRef, useMemo, useEffect, useLayoutEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { ThreeElements } from '@react-three/fiber';
-import { OrbitControls, GizmoHelper, GizmoViewport, AdaptiveDpr } from '@react-three/drei';
+import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
+
+// Fixed, capped device pixel ratio — exactly what RapidTool-Fixture uses
+// (min(devicePixelRatio, 2)). A fixed DPR renders fewer pixels on hi-DPI screens
+// (less lag) WITHOUT switching resolution during interaction, so there's no
+// shimmer/jitter while zooming or panning.
+const VIEWER_DPR = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2);
 import * as THREE from 'three';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 import { NavigationHelp } from '@rapidtool/cad-ui';
@@ -763,9 +769,7 @@ export const DesignWorkspace: React.FC = () => {
         ref={canvasRef}
         // Cap DPR (Fixture does min(dpr, 2)) — full device pixel ratio on hi-DPI
         // screens is the main cause of laggy orbit on a heavy CSG mesh.
-        dpr={[1, 2]}
-        // Let R3F regress quality during interaction; AdaptiveDpr restores it when idle.
-        performance={{ min: 0.5 }}
+        dpr={VIEWER_DPR}
         camera={{
           fov: 45,
           near: 0.1,
@@ -790,8 +794,6 @@ export const DesignWorkspace: React.FC = () => {
           canvas.addEventListener('webglcontextrestored', () => { gl.setClearColor(0x000000, 0); }, false);
         }}
       >
-        {/* Drops resolution while orbiting/zooming, restores it when the camera settles. */}
-        <AdaptiveDpr pixelated />
         <Scene
           layoutState={layoutState}
           toolOutlines={toolOutlines}

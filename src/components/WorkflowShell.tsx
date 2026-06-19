@@ -22,9 +22,11 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   FileText, Wrench, LayoutGrid, Box, Download,
   RotateCcw, ChevronLeft, ChevronRight, UserCircle2,
-  AlertCircle, ArrowRight, X,
+  AlertCircle, ArrowRight, X, CheckCircle2, Loader2,
+  Undo2, Redo2, HelpCircle, FolderPlus, FolderOpen, Save,
+  Moon, Sun,
 } from 'lucide-react';
-import { RapidToolLogo, ThemeToggle, SidebarIcon, SidebarIconGroup, LoadingOverlay } from '@rapidtool/cad-ui';
+import { RapidToolLogo, SidebarIcon, SidebarIconGroup, LoadingOverlay, StepProgress } from '@rapidtool/cad-ui';
 import { IconIsoFace, IconIsoTop, IconIsoLeftFace, IconIsoCorner } from './icons';
 import { useAppStore, type WorkflowStep } from '../stores';
 import { useAuthStore } from '../stores/authStore';
@@ -39,13 +41,19 @@ import { ExportWorkspace } from './ExportWorkspace';
 import { ErrorBoundary } from './ErrorBoundary';
 
 // ── Step config ─────────────────────────────────────────────────────────────
-interface StepConfig { step: WorkflowStep; label: string; icon: React.ReactNode; }
+interface StepConfig {
+  step: WorkflowStep;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+  IconComponent: React.ComponentType<{ className?: string }>;
+}
 const stepConfigs: StepConfig[] = [
-  { step: 'paper',  label: 'Detect Paper',     icon: <FileText className="w-4 h-4" /> },
-  { step: 'tools',  label: 'Trace Tools',      icon: <Wrench className="w-4 h-4" /> },
-  { step: 'layout', label: 'Configure Layout', icon: <LayoutGrid className="w-4 h-4" /> },
-  { step: 'design', label: '3D Design',        icon: <Box className="w-4 h-4" /> },
-  { step: 'export', label: 'Export',           icon: <Download className="w-4 h-4" /> },
+  { step: 'paper',  label: 'Detect Paper',     description: 'Upload and calibrate image scale', icon: <FileText className="w-4 h-4" />, IconComponent: FileText },
+  { step: 'tools',  label: 'Trace Tools',      description: 'Extract tool contour boundaries', icon: <Wrench className="w-4 h-4" />, IconComponent: Wrench },
+  { step: 'layout', label: 'Configure Layout', description: 'Arrange pocket layouts on baseplate', icon: <LayoutGrid className="w-4 h-4" />, IconComponent: LayoutGrid },
+  { step: 'design', label: '3D Design',        description: 'Configure holder height and thickness', icon: <Box className="w-4 h-4" />, IconComponent: Box },
+  { step: 'export', label: 'Export',           description: 'Save as SVG or 3D STL file', icon: <Download className="w-4 h-4" />, IconComponent: Download },
 ];
 const stepOrder = stepConfigs.map((c) => c.step);
 
@@ -159,6 +167,67 @@ export const WorkflowShell: React.FC = () => {
     }
   }, [resetAll]);
 
+  const handleSaveSession = useCallback(() => {
+    const state = useAppStore.getState();
+    const sessionData = {
+      version: '1.0.0',
+      projectName: state.projectName,
+      paperCorners: state.paperCorners,
+      paperDetected: state.paperDetected,
+      paperConfidence: state.paperConfidence,
+      pixelsPerMm: state.pixelsPerMm,
+      toolOutlines: state.toolOutlines,
+      clearanceValue: state.clearanceValue,
+      layoutState: state.layoutState,
+      designSettings: state.designSettings,
+    };
+    const blob = new Blob([JSON.stringify(sessionData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${state.projectName.toLowerCase().replace(/\s+/g, '-')}.rapidtool`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const handleOpenSession = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.rapidtool,application/json';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const data = JSON.parse(event.target?.result as string);
+          if (data.projectName) {
+            const store = useAppStore.getState();
+            useAppStore.setState({
+              projectName: data.projectName,
+              paperCorners: data.paperCorners || null,
+              paperDetected: data.paperDetected || false,
+              paperConfidence: data.paperConfidence || 0,
+              pixelsPerMm: data.pixelsPerMm || null,
+              toolOutlines: data.toolOutlines || [],
+              clearanceValue: data.clearanceValue ?? 0.5,
+              layoutState: data.layoutState || store.layoutState,
+              designSettings: data.designSettings || store.designSettings,
+              currentStep: 'paper',
+            });
+            alert(`Session "${data.projectName}" loaded successfully! Note: Please re-upload your workpiece image if calibrating.`);
+          } else {
+            alert('Invalid session file format.');
+          }
+        } catch (err) {
+          alert('Failed to parse the file.');
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  }, []);
+
   // ── Project name editing ───────────────────────────────────────────────────
   const startEditingName = useCallback(() => { setNameDraft(projectName); setIsEditingName(true); setTimeout(() => nameInputRef.current?.select(), 0); }, [projectName]);
   const saveName = useCallback(() => { const t = nameDraft.trim(); if (t) setProjectName(t); setIsEditingName(false); }, [nameDraft, setProjectName]);
@@ -178,34 +247,61 @@ export const WorkflowShell: React.FC = () => {
   return (
     <div className="h-screen flex flex-col overflow-hidden">
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <header className="h-14 flex items-center justify-between px-4 border-b border-[hsl(var(--border)/0.6)] tech-glass">
+      <header className="h-14 flex items-center justify-between px-4 border-b border-border/60 tech-glass">
         {/* Left */}
-        <div className="flex items-center gap-3">
-          <RapidToolLogo productName="ToolTrace" icon={<Wrench size={18} />} />
-          <div className="w-px h-6 bg-[hsl(var(--border))]" />
-          <button onClick={handleReset} title="Reset session"
-            className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--accent-foreground))] hover:bg-[hsl(var(--accent))] tech-transition">
-            <RotateCcw className="w-4 h-4" /> Reset
-          </button>
+        <div className="flex items-center gap-4">
+          <RapidToolLogo productName="tooltrace" icon={<Wrench className="w-4 h-4 text-amber-500 flex-shrink-0" />} />
+          <div className="w-px h-6 bg-border/50" />
+          <div className="flex items-center gap-2">
+            <button onClick={handleReset} title="Reset session"
+              className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted tech-transition">
+              <RotateCcw className="w-3.5 h-3.5 mr-0.5" /> Reset
+            </button>
+            <div className="w-px h-6 bg-border/50" />
+            <div className="flex items-center gap-1">
+              <button disabled className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground opacity-40 cursor-not-allowed">
+                <Undo2 className="w-4 h-4" />
+              </button>
+              <button disabled className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground opacity-40 cursor-not-allowed">
+                <Redo2 className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="w-px h-6 bg-border/50" />
+            <button className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="Restart Tutorial">
+              <HelpCircle className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Center — project name + processing */}
+        {/* Center — project name + file session controls */}
         <div className="flex items-center gap-4 absolute left-1/2 -translate-x-1/2">
+          <div className="flex items-center gap-1">
+            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="New design file">
+              <FolderPlus className="w-4 h-4" />
+            </button>
+            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="Open .rapidtool file">
+              <FolderOpen className="w-4 h-4" />
+            </button>
+            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="Save now">
+              <Save className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="w-px h-6 bg-border/50" />
           <div className="flex items-center gap-2 text-sm font-tech">
             {isEditingName ? (
               <input ref={nameInputRef} type="text" value={nameDraft} autoFocus
                 onChange={(e) => setNameDraft(e.target.value)} onBlur={saveName}
                 onKeyDown={(e) => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setIsEditingName(false); }}
-                className="bg-[hsl(var(--muted)/0.5)] border border-[hsl(var(--border))] rounded px-2 py-0.5 text-sm font-tech w-48 focus:outline-none focus:ring-1 focus:ring-[hsl(var(--primary))]" />
+                className="bg-muted/50 border border-border rounded px-2 py-0.5 text-sm font-tech w-48 focus:outline-none focus:ring-1 focus:ring-primary" />
             ) : (
               <span onDoubleClick={startEditingName} title="Double-click to rename"
-                className="text-[hsl(var(--foreground))] cursor-pointer hover:text-[hsl(var(--primary))] transition-colors px-2 py-0.5 rounded hover:bg-[hsl(var(--muted)/0.3)]">
+                className="text-foreground cursor-pointer hover:text-primary transition-colors px-2 py-0.5 rounded hover:bg-muted/30">
                 {projectName}
               </span>
             )}
           </div>
           {isProcessing && (
-            <div className="flex items-center gap-2 text-xs font-tech text-[hsl(var(--primary))]">
+            <div className="flex items-center gap-2 text-xs font-tech text-primary">
               <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin" />
               <span>{processingMessage || 'Processing…'}</span>
             </div>
@@ -213,24 +309,27 @@ export const WorkflowShell: React.FC = () => {
         </div>
 
         {/* Right — view buttons + theme */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           <div className="flex items-center gap-1">
             {VIEW_BUTTONS.map(({ o, Icon, cls, title }) => (
               <button key={o} onClick={() => handleOrientation(o)} title={title}
-                className="w-8 h-8 flex items-center justify-center rounded-md text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--accent))] hover:bg-[hsl(var(--accent)/0.12)] tech-transition">
+                className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition">
                 <Icon className={`w-4 h-4 ${cls}`} />
               </button>
             ))}
           </div>
-          <div className="w-px h-6 bg-[hsl(var(--border))]" />
-          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <div className="w-px h-6 bg-border/50" />
+          {/* Mapped as outline button to match Fixture style */}
+          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border hover:bg-muted hover:text-foreground tech-transition shadow-sm" title="Toggle theme">
+            {theme === 'light' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
         </div>
       </header>
 
       {/* ── Main content ─────────────────────────────────────────────────── */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left icon rail — workflow steps */}
-        <aside className="w-14 flex-shrink-0 border-r border-[hsl(var(--border)/0.5)] tech-glass flex flex-col" role="toolbar" aria-label="Workflow steps">
+        <aside className="w-14 flex-shrink-0 border-r border-border/50 tech-glass flex flex-col" role="toolbar" aria-label="Workflow steps">
           <SidebarIconGroup direction="vertical" gap={8} className="p-2 flex-1">
             {stepConfigs.map((c) => {
               const active = c.step === currentStep;
@@ -247,23 +346,122 @@ export const WorkflowShell: React.FC = () => {
               );
             })}
           </SidebarIconGroup>
+          <div className="p-3 border-t border-border/50 flex items-center justify-center">
+            <SidebarIcon
+              icon={<UserCircle2 className="w-4 h-4 opacity-60" />}
+              label="Account Settings"
+              tooltip="Account Settings"
+              onClick={() => setIsAccountOpen(true)}
+              size="sm"
+            />
+          </div>
         </aside>
 
         {/* Context Options panel */}
-        <aside className="border-r border-[hsl(var(--border)/0.5)] tech-glass flex flex-col overflow-hidden flex-shrink-0"
+        <aside className="border-r border-border/50 tech-glass flex flex-col overflow-hidden flex-shrink-0"
           style={{ width: isContextCollapsed ? 48 : 320, transition: 'width 300ms ease-in-out' }}>
-          <div className="p-2 border-b border-[hsl(var(--border)/0.5)] flex items-center justify-between flex-shrink-0">
+          <div className="p-2 border-b border-border/50 flex items-center justify-between flex-shrink-0">
             {!isContextCollapsed && <h3 className="font-tech font-semibold text-sm whitespace-nowrap">Context Options</h3>}
-            <button onClick={() => setIsContextCollapsed((v) => !v)}
+            <button onClick={() => {
+                setIsContextCollapsed((v) => !v);
+                setTimeout(() => {
+                  window.dispatchEvent(new Event('resize'));
+                  window.dispatchEvent(new CustomEvent('viewer-resize'));
+                }, 320);
+              }}
               title={isContextCollapsed ? 'Expand Panel' : 'Collapse Panel'}
-              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent)/0.12)] hover:text-[hsl(var(--accent))] ${isContextCollapsed ? 'mx-auto' : ''}`}>
+              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-muted-foreground hover:bg-muted hover:text-foreground ${isContextCollapsed ? 'mx-auto' : ''}`}>
               {isContextCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
             </button>
           </div>
           {!isContextCollapsed && (
-            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-              <ErrorBoundary><ControlPanel /></ErrorBoundary>
-            </div>
+            <>
+              {/* Step Header */}
+              <div className="p-4 border-b border-border/50 flex-shrink-0">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+                    {(() => {
+                      const cfg = stepConfigs.find(s => s.step === currentStep);
+                      if (cfg) {
+                        const Icon = cfg.IconComponent;
+                        return <Icon className="w-5 h-5 text-primary" />;
+                      }
+                      return null;
+                    })()}
+                  </div>
+                  <div className="flex-1">
+                    <h2 className="font-tech font-semibold text-base leading-tight text-foreground">
+                      {stepConfigs.find(s => s.step === currentStep)?.label}
+                    </h2>
+                    <p className="text-[11px] text-muted-foreground font-tech mt-0.5">
+                      {stepConfigs.find(s => s.step === currentStep)?.description}
+                    </p>
+                  </div>
+                  {isProcessing && (
+                    <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                  )}
+                </div>
+
+                {/* Progress indicator */}
+                <StepProgress
+                  currentStep={stepOrder.indexOf(currentStep) + 1}
+                  totalSteps={stepConfigs.length}
+                  completedCount={
+                    [
+                      paperDetected,
+                      toolOutlines.length > 0,
+                      layoutState.shapes.length > 0,
+                      currentStep === 'export' || (currentStep === 'design' && layoutState.shapes.length > 0),
+                    ].filter(Boolean).length
+                  }
+                  barHeight={5}
+                  className="mt-3"
+                />
+              </div>
+
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <ErrorBoundary><ControlPanel /></ErrorBoundary>
+              </div>
+              {/* Step Navigation Mini-Map */}
+              <div className="p-3 border-t border-border/50 flex-shrink-0">
+                <div className="flex items-center justify-between gap-1">
+                  {stepConfigs.map((c, i) => {
+                    const active = c.step === currentStep;
+                    
+                    let isCompleted = false;
+                    if (c.step === 'paper') isCompleted = paperDetected;
+                    else if (c.step === 'tools') isCompleted = toolOutlines.length > 0;
+                    else if (c.step === 'layout') isCompleted = layoutState.shapes.length > 0;
+                    else if (c.step === 'design') isCompleted = currentStep === 'export';
+                    
+                    const status = active ? 'current' : isCompleted ? 'completed' : 'upcoming';
+
+                    return (
+                      <button
+                        key={c.step}
+                        onClick={() => handleStepClick(c.step)}
+                        className={`
+                          relative flex items-center justify-center w-8 h-8 rounded-md transition-all cursor-pointer
+                          ${status === 'current'
+                            ? 'bg-primary text-primary-foreground font-bold shadow-sm'
+                            : status === 'completed'
+                              ? 'bg-primary/20 text-primary hover:bg-primary/30'
+                              : 'bg-muted/50 text-muted-foreground hover:bg-muted'
+                          }
+                        `}
+                        title={`${i + 1}. ${c.label}`}
+                      >
+                        {status === 'completed' ? (
+                          <CheckCircle2 className="w-4 h-4" />
+                        ) : (
+                          c.icon
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
           )}
         </aside>
 
@@ -274,13 +472,19 @@ export const WorkflowShell: React.FC = () => {
         </main>
 
         {/* Right Properties panel */}
-        <aside className="border-l border-[hsl(var(--border)/0.5)] tech-glass flex flex-col overflow-hidden flex-shrink-0"
+        <aside className="border-l border-border/50 tech-glass flex flex-col overflow-hidden flex-shrink-0"
           style={{ width: isPropertiesCollapsed ? 48 : 280, transition: 'width 300ms ease-in-out' }}>
-          <div className="p-2 border-b border-[hsl(var(--border)/0.5)] flex items-center justify-between flex-shrink-0">
+          <div className="p-2 border-b border-border/50 flex items-center justify-between flex-shrink-0">
             {!isPropertiesCollapsed && <h3 className="font-tech font-semibold text-sm whitespace-nowrap">Properties</h3>}
-            <button onClick={() => setIsPropertiesCollapsed((v) => !v)}
+            <button onClick={() => {
+                setIsPropertiesCollapsed((v) => !v);
+                setTimeout(() => {
+                  window.dispatchEvent(new Event('resize'));
+                  window.dispatchEvent(new CustomEvent('viewer-resize'));
+                }, 320);
+              }}
               title={isPropertiesCollapsed ? 'Expand Properties' : 'Collapse Properties'}
-              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent)/0.12)] hover:text-[hsl(var(--accent))] ${isPropertiesCollapsed ? 'mx-auto' : ''}`}>
+              className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition text-muted-foreground hover:bg-muted hover:text-foreground ${isPropertiesCollapsed ? 'mx-auto' : ''}`}>
               {isPropertiesCollapsed ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
           </div>
@@ -292,46 +496,15 @@ export const WorkflowShell: React.FC = () => {
         </aside>
       </div>
 
-      {/* ── Bottom bar — account (far left, in the rail column) + horizontal flow steps,
-           both on the same row. ── */}
-      <div className="h-12 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center pr-3">
-        <div className="w-14 flex items-center justify-center shrink-0">
-          <SidebarIcon
-            icon={<UserCircle2 className="w-4 h-4 opacity-60" />}
-            label="Account Settings"
-            tooltip="Account Settings"
-            onClick={() => setIsAccountOpen(true)}
-            size="sm"
-          />
-        </div>
-        <SidebarIconGroup direction="horizontal" gap={4} align="center">
-          {stepConfigs.map((c, i) => {
-            const active = c.step === currentStep;
-            return (
-              <SidebarIcon
-                key={c.step}
-                icon={c.icon}
-                label={c.label}
-                tooltip={`${i + 1}. ${c.label}`}
-                active={active}
-                onClick={() => handleStepClick(c.step)}
-                size="md"
-              />
-            );
-          })}
-        </SidebarIconGroup>
-      </div>
+
 
       {/* ── Footer ───────────────────────────────────────────────────────── */}
-      <footer className="h-6 border-t border-[hsl(var(--border)/0.5)] tech-glass flex items-center justify-between px-4 text-[10px] font-tech text-[hsl(var(--muted-foreground))]">
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-[hsl(var(--success))] inline-block" /> Ready
-          </span>
-          <span className="text-[hsl(var(--border))]">•</span>
+      <footer className="h-6 border-t border-border/50 tech-glass flex items-center justify-between px-4 text-xs font-tech text-muted-foreground">
+        <div className="flex items-center gap-4">
+          <span>Ready</span>
+          <span>•</span>
           <span>WebGL 2.0</span>
         </div>
-        <span className="text-[hsl(var(--muted-foreground)/0.5)]">ToolTrace</span>
       </footer>
 
       <PrerequisitesNotification

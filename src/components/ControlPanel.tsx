@@ -31,6 +31,7 @@ import {
   Sparkles,
   Plus,
   Undo2,
+  Upload,
 } from "lucide-react";
 
 import { useAppStore } from "../stores";
@@ -140,37 +141,57 @@ const PaperStepPanel: React.FC = () => {
       {!imageFile ? (
         <div className="h-full flex flex-col">
           {/* Top section - scrollable tips */}
-          <div className="flex-1 overflow-y-auto space-y-4">
-            {/* Primary Action */}
-            <div className="space-y-3 pb-2">
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="
-                  w-full h-11 px-4 
-                  rounded-xl text-[14px] font-bold
-                  transition-all duration-300 flex items-center justify-center gap-2
-                  text-white group
-                "
-                style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-btn)' }}
-              >
-                <Plus className="w-4 h-4 group-hover:rotate-90 transition-transform duration-300" />
-                Browse Image
-              </button>
-              <p className="text-[11px] text-center text-[hsl(var(--muted-foreground))] font-medium">
-                Click or drag into the viewport to begin
+          <div className="flex-1 overflow-y-auto space-y-4 px-4 py-4">
+            {/* Upload Dropzone Card (Aligned with RapidTool-Fixture style) */}
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="
+                relative overflow-hidden tech-glass border-2 border-dashed border-[hsl(var(--border))] 
+                hover:border-[hsl(var(--primary)/0.5)] rounded-xl p-6 text-center cursor-pointer 
+                transition-all duration-300 group
+              "
+            >
+              <div className="mx-auto mb-3.5 w-14 h-14 rounded-2xl bg-[hsl(var(--muted)/0.4)] border border-[hsl(var(--border)/0.6)] flex items-center justify-center transition-colors group-hover:bg-[hsl(var(--primary)/0.05)] group-hover:border-[hsl(var(--primary)/0.2)]">
+                <Upload className="w-6 h-6 text-[hsl(var(--muted-foreground))] transition-colors group-hover:text-[hsl(var(--primary))]" />
+              </div>
+              <h3 className="font-tech font-semibold text-sm text-[hsl(var(--foreground))]">Import Paper Image</h3>
+              <p className="text-xs text-[hsl(var(--muted-foreground))] font-tech mt-2 leading-relaxed text-center flex flex-col items-center">
+                <span>Drag and drop image here, or</span>
+                <span className="text-[hsl(var(--primary))] hover:underline font-medium mt-1 cursor-pointer">browse files</span>
               </p>
+              
+              <div className="mt-5 pt-4 border-t border-[hsl(var(--border)/0.5)] space-y-2">
+                <div className="flex items-center justify-center gap-2 text-xs text-[hsl(var(--muted-foreground))] font-tech">
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Supported formats: JPEG, PNG, WEBP, BMP</span>
+                </div>
+                <div className="flex items-center justify-center gap-2 text-xs text-[hsl(var(--muted-foreground))] font-tech">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>Maximum file size: 50 MB</span>
+                </div>
+              </div>
             </div>
 
-            {/* Quick Start Section */}
-            <div className="space-y-2">
+            {/* Quick Start & Supported Formats Card */}
+            <div className="tech-glass rounded-xl p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-[hsl(var(--primary))]" />
-                <h3 className="text-[13px] font-semibold" style={{ letterSpacing: '-0.02em' }}>Quick Start</h3>
+                <Sparkles className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
+                <h4 className="text-xs font-semibold text-[hsl(var(--foreground))]">Quick Start</h4>
               </div>
-              <p className="text-[12px] text-[hsl(var(--muted-foreground))] leading-relaxed">
-                Upload a photo of your tools on white A4 paper. We'll
-                auto-detect and trace them.
+              <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed font-tech">
+                Upload a photo of your tools on white A4 paper. We'll automatically calibrate scale dimensions and trace their outlines.
               </p>
+              <div className="h-px bg-[hsl(var(--border)/0.5)] my-2" />
+              <div className="text-xs text-[hsl(var(--muted-foreground))] font-tech space-y-1.5">
+                <p className="font-semibold text-[hsl(var(--foreground))]">Supported formats:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {['JPEG', 'PNG', 'WEBP', 'BMP'].map(fmt => (
+                    <span key={fmt} className="px-1.5 py-0.5 bg-[hsl(var(--muted)/0.6)] border border-[hsl(var(--border)/0.4)] rounded text-[10px] font-bold">
+                      {fmt}
+                    </span>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Best Practices */}
@@ -187,12 +208,8 @@ const PaperStepPanel: React.FC = () => {
                     <FileText className="w-3.5 h-3.5 text-[hsl(var(--primary))]" />
                   </div>
                   <div>
-                    <p className="text-[12px] font-medium">
-                      Use White A4 Paper
-                    </p>
-                    <p className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">
-                      Standard A4 provides accurate scale
-                    </p>
+                    <p className="text-[12px] font-medium">Use White A4 Paper</p>
+                    <p className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">Standard A4 provides accurate scale</p>
                   </div>
                 </div>
 
@@ -203,9 +220,7 @@ const PaperStepPanel: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-[12px] font-medium">Shoot from Above</p>
-                    <p className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">
-                      Keep camera parallel to paper
-                    </p>
+                    <p className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">Keep camera parallel to paper</p>
                   </div>
                 </div>
 
@@ -216,9 +231,7 @@ const PaperStepPanel: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-[12px] font-medium">Good Lighting</p>
-                    <p className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">
-                      Avoid shadows for cleaner detection
-                    </p>
+                    <p className="text-[11px] text-[hsl(var(--muted-foreground))] mt-0.5">Avoid shadows for cleaner detection</p>
                   </div>
                 </div>
               </div>
@@ -226,7 +239,7 @@ const PaperStepPanel: React.FC = () => {
           </div>
 
           {/* Bottom section - Progress */}
-          <div className="pt-4 mt-auto border-t border-[hsl(var(--border))] space-y-4">
+          <div className="pt-4 mt-auto border-t border-[hsl(var(--border))] space-y-4 px-4 pb-4">
             <div className="space-y-2.5">
               <h3 className="text-[11px] font-bold text-[hsl(var(--foreground))] uppercase tracking-widest px-1">
                 Process
@@ -269,7 +282,7 @@ const PaperStepPanel: React.FC = () => {
       ) : (
         /* When image is loaded - show image info and detection status */
         <>
-          <div className="flex-1 overflow-y-auto space-y-3">
+          <div className="flex-1 overflow-y-auto space-y-3 px-4 py-4">
             {/* Loaded image indicator */}
             <div className="flex items-center gap-2.5 p-3 bg-[hsl(var(--muted)/0.4)] rounded-xl">
               <div className="w-8 h-8 rounded-lg bg-[hsl(var(--background))] flex items-center justify-center">
@@ -292,7 +305,7 @@ const PaperStepPanel: React.FC = () => {
           </div>
 
           {/* Bottom Section - Detection Status & CTA */}
-          <div className="pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3">
+          <div className="pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3 px-4 pb-4">
             {/* Detection Status */}
             {isDetecting ? (
               <div className="flex items-center gap-2 p-3 bg-[hsl(var(--primary)/0.05)] border border-[hsl(var(--primary)/0.1)] rounded-xl">
@@ -606,7 +619,7 @@ const ToolsStepPanel: React.FC = () => {
     <div className="h-full flex flex-col">
       {/* Prerequisite Warning Banner */}
       {isDisabled && (
-        <div className="mb-3 p-3 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-center gap-2">
+        <div className="mb-3 p-3 mx-4 mt-4 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-[hsl(var(--warning))] shrink-0" />
           <p className="text-[12px] text-[hsl(var(--warning))] font-medium">
             Complete paper detection first to enable tracing
@@ -616,7 +629,7 @@ const ToolsStepPanel: React.FC = () => {
 
       {/* Scrollable Content */}
       <div
-        className={`flex-1 overflow-y-auto space-y-3 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
+        className={`flex-1 overflow-y-auto space-y-3 px-4 py-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
       >
         {/* Auto Detect (AI) Banner / Status */}
         {isAiDetecting && (
@@ -859,7 +872,7 @@ const ToolsStepPanel: React.FC = () => {
 
       {/* Bottom Section - Clearance & CTA */}
       <div
-        className={`pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
+        className={`pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3 px-4 pb-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
       >
         {/* Clearance Control */}
         <div className="space-y-1.5">
@@ -990,7 +1003,7 @@ const ExportStepPanel: React.FC = () => {
     <div className="h-full flex flex-col">
       {/* Prerequisite Warning Banner */}
       {isDisabled && (
-        <div className="mb-3 p-3 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-start gap-2">
+        <div className="mb-3 p-3 mx-4 mt-4 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-[hsl(var(--warning))] shrink-0 mt-0.5" />
           <div className="text-[12px] text-[hsl(var(--warning))] font-medium">
             {!hasTools && <p>• Trace tools in step 2</p>}
@@ -1001,7 +1014,7 @@ const ExportStepPanel: React.FC = () => {
 
       {/* Export message (replaces blocking alerts) */}
       {exportMsg && (
-        <div className="mb-3 p-2.5 bg-[hsl(var(--destructive)/0.08)] border border-[hsl(var(--destructive)/0.2)] rounded-lg flex items-center gap-2">
+        <div className="mb-3 p-2.5 mx-4 mt-4 bg-[hsl(var(--destructive)/0.08)] border border-[hsl(var(--destructive)/0.2)] rounded-lg flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-[hsl(var(--destructive))] shrink-0" />
           <p className="text-[12px] text-[hsl(var(--destructive))] font-medium">{exportMsg}</p>
         </div>
@@ -1009,7 +1022,7 @@ const ExportStepPanel: React.FC = () => {
 
       {/* Scrollable Content */}
       <div
-        className={`flex-1 overflow-y-auto space-y-3 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
+        className={`flex-1 overflow-y-auto space-y-3 px-4 py-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
       >
         {/* Format Selection */}
         <div className="space-y-1.5">
@@ -1089,7 +1102,7 @@ const ExportStepPanel: React.FC = () => {
 
       {/* CTA Button - Fixed at bottom */}
       <div
-        className={`pt-3 border-t border-[hsl(var(--border))] mt-3 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
+        className={`pt-3 border-t border-[hsl(var(--border))] mt-3 px-4 pb-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
       >
         <button
           onClick={handleExport}
@@ -1144,7 +1157,7 @@ const LayoutStepPanel: React.FC = () => {
     <div className="h-full flex flex-col">
       {/* Prerequisite Warning Banner */}
       {isDisabled && (
-        <div className="mb-3 p-3 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-center gap-2">
+        <div className="mb-3 p-3 mx-4 mt-4 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-[hsl(var(--warning))] shrink-0" />
           <p className="text-[12px] text-[hsl(var(--warning))] font-medium">
             Trace tools in step 2 first to configure layout
@@ -1154,7 +1167,7 @@ const LayoutStepPanel: React.FC = () => {
 
       {/* Scrollable Content */}
       <div
-        className={`flex-1 overflow-y-auto space-y-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
+        className={`flex-1 overflow-y-auto space-y-4 px-4 py-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
       >
         {/* Grid Settings */}
         <div className="space-y-2">
@@ -1409,7 +1422,7 @@ const LayoutStepPanel: React.FC = () => {
       </div>
 
       {/* Layout Summary & CTA Button - Fixed at bottom */}
-      <div className="pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3">
+      <div className="pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3 px-4 pb-4">
         {/* Layout Summary */}
         <div className="p-3 bg-[hsl(var(--muted)/0.3)] rounded-xl">
           <div className="grid grid-cols-3 gap-2 text-center">
@@ -1483,7 +1496,7 @@ const DesignStepPanel: React.FC = () => {
     <div className="h-full flex flex-col">
       {/* Prerequisite Warning Banner */}
       {isDisabled && (
-        <div className="mb-3 p-3 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-start gap-2">
+        <div className="mb-3 p-3 mx-4 mt-4 bg-[hsl(var(--warning)/0.08)] border border-[hsl(var(--warning)/0.15)] rounded-xl flex items-start gap-2">
           <AlertCircle className="w-4 h-4 text-[hsl(var(--warning))] shrink-0 mt-0.5" />
           <div className="text-[12px] text-[hsl(var(--warning))] font-medium">
             {!hasTools && <p>• Trace tools in step 2</p>}
@@ -1494,7 +1507,7 @@ const DesignStepPanel: React.FC = () => {
 
       {/* Scrollable Content */}
       <div
-        className={`flex-1 overflow-y-auto space-y-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
+        className={`flex-1 overflow-y-auto space-y-4 px-4 py-4 ${isDisabled ? "opacity-60 pointer-events-none" : ""}`}
       >
         {/* Info */}
         <div className="p-3 bg-[hsl(var(--muted)/0.4)] rounded-xl">
@@ -1680,7 +1693,7 @@ const DesignStepPanel: React.FC = () => {
       </div>
 
       {/* Summary & CTA Button - Fixed at bottom */}
-      <div className="pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3">
+      <div className="pt-3 border-t border-[hsl(var(--border))] mt-3 space-y-3 px-4 pb-4">
         {/* Design Summary */}
         <div className="p-3 bg-[hsl(var(--muted)/0.3)] rounded-xl">
           <div className="grid grid-cols-2 gap-2 text-center">
@@ -1730,7 +1743,7 @@ export const ControlPanel: React.FC = () => {
   return (
     <div className="h-full flex flex-col">
       {/* Step Content */}
-      <div className="flex-1 overflow-hidden p-3">
+      <div className="flex-1 overflow-hidden">
         {currentStep === "paper" && <PaperStepPanel />}
         {currentStep === "tools" && <ToolsStepPanel />}
         {currentStep === "layout" && <LayoutStepPanel />}
