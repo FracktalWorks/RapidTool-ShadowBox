@@ -122,46 +122,7 @@ const VIEW_BUTTONS: { o: string; Icon: React.FC<{ className?: string }>; cls: st
   { o: 'iso',   Icon: IconIsoCorner,   cls: '',           title: 'Isometric View' },
 ];
 
-// ── Prerequisites notification (ported from Sidebar) ─────────────────────────
-const PrerequisitesNotification: React.FC<{
-  isOpen: boolean; onClose: () => void; targetStep: WorkflowStep | null;
-  incompleteSteps: StepConfig[]; onGoToStep: (step: WorkflowStep) => void;
-}> = ({ isOpen, onClose, targetStep, incompleteSteps, onGoToStep }) => {
-  const targetConfig = stepConfigs.find((s) => s.step === targetStep);
-  if (!isOpen || !targetConfig) return null;
-  return (
-    <div className="fixed top-20 left-1/2 -translate-x-1/2 z-40 w-full max-w-md pointer-events-auto" style={{ animation: 'fadeIn 0.2s ease-out' }}>
-      <div className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl shadow-xl overflow-hidden">
-        <div className="px-4 py-3 flex items-start gap-3">
-          <div className="w-8 h-8 rounded-lg bg-[hsl(var(--warning)/0.15)] flex items-center justify-center shrink-0">
-            <AlertCircle className="w-4 h-4 text-[hsl(var(--warning))]" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-xs font-semibold text-[hsl(var(--foreground))]">Complete previous steps</h3>
-            <p className="mt-0.5 text-[11px] text-[hsl(var(--muted-foreground))] leading-relaxed">
-              <span className="font-medium text-[hsl(var(--foreground))]">{targetConfig.label}</span> requires the following:
-            </p>
-          </div>
-          <button onClick={onClose} className="w-6 h-6 rounded-md flex items-center justify-center text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:bg-[hsl(var(--muted))] transition-colors shrink-0">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-        <div className="px-4 pb-3">
-          <div className="flex flex-wrap gap-1.5">
-            {incompleteSteps.map((sc) => (
-              <button key={sc.step} onClick={() => { onGoToStep(sc.step); onClose(); }}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-[hsl(var(--muted)/0.6)] hover:bg-[hsl(var(--primary)/0.1)] border border-[hsl(var(--border)/0.5)] hover:border-[hsl(var(--primary)/0.3)] transition-colors group">
-                <span className="text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--primary))] transition-colors">{sc.icon}</span>
-                <span className="text-[11px] font-medium text-[hsl(var(--foreground))] group-hover:text-[hsl(var(--primary))] transition-colors">{sc.label}</span>
-                <ArrowRight className="w-3 h-3 text-[hsl(var(--muted-foreground))] group-hover:text-[hsl(var(--primary))] transition-colors" />
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+
 
 // ── Shell ─────────────────────────────────────────────────────────────────────
 export const WorkflowShell: React.FC = () => {
@@ -180,38 +141,17 @@ export const WorkflowShell: React.FC = () => {
   const [nameDraft, setNameDraft] = useState(projectName);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
-  const [prereqModal, setPrereqModal] = useState<{ isOpen: boolean; targetStep: WorkflowStep | null; incompleteSteps: StepConfig[] }>(
-    { isOpen: false, targetStep: null, incompleteSteps: [] }
-  );
+
+
   const [isTipsVisible, setIsTipsVisible] = useState(true);
 
-  // ── Prerequisites (ported from Sidebar) ────────────────────────────────────
-  const getIncompletePrerequisites = useCallback((step: WorkflowStep): StepConfig[] => {
-    const incomplete: StepConfig[] = [];
-    const targetIndex = stepOrder.indexOf(step);
-    for (let i = 0; i < targetIndex; i++) {
-      const prereq = stepOrder[i];
-      let ok = false;
-      switch (prereq) {
-        case 'paper':  ok = paperDetected; break;
-        case 'tools':  ok = toolOutlines.length > 0; break;
-        case 'layout': ok = layoutState.shapes.length > 0; break;
-        default:       ok = true;
-      }
-      if (!ok) { const c = stepConfigs.find((s) => s.step === prereq); if (c) incomplete.push(c); }
-    }
-    return incomplete;
-  }, [paperDetected, toolOutlines.length, layoutState.shapes.length]);
-
   const handleStepClick = useCallback((step: WorkflowStep) => {
-    const incomplete = getIncompletePrerequisites(step);
     setCurrentStep(step);
-    if (incomplete.length > 0) setPrereqModal({ isOpen: true, targetStep: step, incompleteSteps: incomplete });
-  }, [getIncompletePrerequisites, setCurrentStep]);
+  }, [setCurrentStep]);
 
   useEffect(() => {
-    if (currentStep === 'paper' && prereqModal.isOpen) setPrereqModal((p) => ({ ...p, isOpen: false }));
-  }, [currentStep, prereqModal.isOpen]);
+    setIsTipsVisible(true);
+  }, [currentStep]);
 
   useEffect(() => {
     setIsTipsVisible(true);
@@ -315,7 +255,7 @@ export const WorkflowShell: React.FC = () => {
           <div className="w-px h-6 bg-border/50" />
             <div className="flex items-center gap-2">
               <button onClick={handleReset} title="Reset session"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer">
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold text-black dark:text-white hover:text-white hover:bg-orange-500 tech-transition cursor-pointer">
                 <RotateCcw className="w-3.5 h-3.5 mr-0.5" /> Reset
               </button>
             <div className="w-px h-6 bg-border/50" />
@@ -328,7 +268,7 @@ export const WorkflowShell: React.FC = () => {
               </button>
             </div>
             <div className="w-px h-6 bg-border/50" />
-              <button className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Restart Tutorial">
+              <button className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Restart Tutorial">
                 <HelpCircle className="w-4 h-4" />
               </button>
           </div>
@@ -337,13 +277,13 @@ export const WorkflowShell: React.FC = () => {
         {/* Center — project name + file session controls */}
         <div className="flex items-center gap-4 absolute left-1/2 -translate-x-1/2">
           <div className="flex items-center gap-1">
-            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="New design file">
+            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="New design file">
               <FolderPlus className="w-4 h-4" />
             </button>
-            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Open .rapidtool file">
+            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Open .rapidtool file">
               <FolderOpen className="w-4 h-4" />
             </button>
-            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Save now">
+            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Save now">
               <Save className="w-4 h-4" />
             </button>
           </div>
@@ -356,7 +296,7 @@ export const WorkflowShell: React.FC = () => {
                 className="bg-muted/50 border border-border rounded px-2 py-0.5 text-sm font-tech w-48 focus:outline-none focus:ring-1 focus:ring-primary" />
             ) : (
               <span onDoubleClick={startEditingName} title="Double-click to rename"
-                className="text-foreground cursor-pointer hover:text-primary transition-colors px-2 py-0.5 rounded hover:bg-muted/30">
+                className="text-black dark:text-white cursor-pointer hover:text-primary transition-colors px-2 py-0.5 rounded hover:bg-muted/30 font-medium">
                 {projectName}
               </span>
             )}
@@ -374,14 +314,14 @@ export const WorkflowShell: React.FC = () => {
           <div className="flex items-center gap-1">
             {VIEW_BUTTONS.map(({ o, Icon, cls, title }) => (
               <button key={o} onClick={() => handleOrientation(o)} title={title}
-                className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer">
+                className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:text-white hover:bg-orange-500 tech-transition cursor-pointer">
                 <Icon className={`w-4 h-4 ${cls}`} />
               </button>
             ))}
           </div>
           <div className="w-px h-6 bg-border/50" />
           {/* Mapped as outline button to match Fixture style */}
-          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border hover:bg-orange-500 hover:text-white hover:border-orange-500 tech-transition shadow-sm cursor-pointer" title="Toggle theme">
+          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border text-black dark:text-white hover:bg-orange-500 hover:text-white hover:border-orange-500 tech-transition shadow-sm cursor-pointer" title="Toggle theme">
             {theme === 'light' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
         </div>
@@ -608,13 +548,7 @@ export const WorkflowShell: React.FC = () => {
         </div>
       </footer>
 
-      <PrerequisitesNotification
-        isOpen={prereqModal.isOpen}
-        onClose={() => setPrereqModal((p) => ({ ...p, isOpen: false }))}
-        targetStep={prereqModal.targetStep}
-        incompleteSteps={prereqModal.incompleteSteps}
-        onGoToStep={setCurrentStep}
-      />
+
 
       <AccountSettings open={isAccountOpen} onOpenChange={setIsAccountOpen} onLogout={handleLogout} />
     </div>

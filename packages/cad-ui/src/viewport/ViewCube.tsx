@@ -81,7 +81,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const edgeLines = new THREE.LineSegments(
       edges,
       new THREE.LineBasicMaterial({ 
-        color: 0x8a8a8a, 
+        color: 0x111111, 
         transparent: true, 
         opacity: 1,
         linewidth: 2.5  // outer
@@ -99,7 +99,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const innerLines = new THREE.LineSegments(
       innerEdges,
       new THREE.LineBasicMaterial({ 
-        color: 0xbdbdbd, 
+        color: 0x444444, 
         transparent: true, 
         opacity: 0.9,
         linewidth: 1.25  // inner
@@ -193,7 +193,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const arrows: { mesh: THREE.Mesh; id: string; mat: THREE.MeshBasicMaterial }[] = [];
     const coneGeom = new THREE.ConeGeometry(0.14, 0.34, 24);
     const addArrow = (id: string, pos: THREE.Vector3, rot: THREE.Euler) => {
-      const mat = new THREE.MeshBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+      const mat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
       const m = new THREE.Mesh(coneGeom, mat);
       m.position.copy(pos);
       // Keep arrows in overlay group (screen plane)
@@ -236,7 +236,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     ];
     const overlaySize = 0.9; // slightly inset
     faces.forEach(f => {
-      const mat = new THREE.MeshBasicMaterial({ color: 0x0891b2, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
+      const mat = new THREE.MeshBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
       const plane = new THREE.PlaneGeometry(overlaySize, overlaySize);
       const overlay = new THREE.Mesh(plane, mat);
 
@@ -262,7 +262,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
         -half,  half, 0,  -half, -half, 0,
       ]);
       outlineGeom.setAttribute('position', new THREE.BufferAttribute(outlinePositions, 3));
-      const outlineMat = new THREE.LineBasicMaterial({ color: 0x0891b2, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
+      const outlineMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
       const outline = new THREE.LineSegments(outlineGeom, outlineMat);
       outline.quaternion.copy(overlay.quaternion);
       outline.position.copy(overlay.position);
@@ -274,7 +274,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       // Corner squares at face rectangle corners (visible faces only via depth test)
       const cornerSize = 0.09;
       const cornerGeom = new THREE.PlaneGeometry(cornerSize, cornerSize);
-      const cornerMat = new THREE.MeshBasicMaterial({ color: 0xd1d5db, transparent: true, opacity: 0.95, depthTest: true, depthWrite: false });
+      const cornerMat = new THREE.MeshBasicMaterial({ color: 0x4b5563, transparent: true, opacity: 0.95, depthTest: true, depthWrite: false });
       const corners = new THREE.Group();
       corners.quaternion.copy(overlay.quaternion);
       corners.position.copy(overlay.position);
@@ -495,12 +495,12 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
   // Hover styling: slightly darken edges; tint the hovered arrow only
   useEffect(() => {
     if (edgeMaterialRef.current) {
-      edgeMaterialRef.current.color.set(hoveredFace ? 0x333333 : 0x666666);
+      edgeMaterialRef.current.color.set(hoveredFace ? 0x000000 : 0x111111);
     }
     const mats = arrowMatsRef.current;
     Object.entries(mats).forEach(([id, mat]) => {
       const isHovered = hoveredArrow === id;
-      mat.color.set(isHovered ? 0x3b82f6 : 0x666666);
+      mat.color.set(isHovered ? 0xea580c : 0x222222);
       mat.opacity = isHovered ? 1 : 0.95;
       mat.needsUpdate = true;
     });
