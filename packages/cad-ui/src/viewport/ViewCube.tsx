@@ -236,7 +236,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     ];
     const overlaySize = 0.9; // slightly inset
     faces.forEach(f => {
-      const mat = new THREE.MeshBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
+      const mat = new THREE.MeshBasicMaterial({ color: 0xfb923c, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
       const plane = new THREE.PlaneGeometry(overlaySize, overlaySize);
       const overlay = new THREE.Mesh(plane, mat);
 
@@ -262,7 +262,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
         -half,  half, 0,  -half, -half, 0,
       ]);
       outlineGeom.setAttribute('position', new THREE.BufferAttribute(outlinePositions, 3));
-      const outlineMat = new THREE.LineBasicMaterial({ color: 0xea580c, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
+      const outlineMat = new THREE.LineBasicMaterial({ color: 0xfb923c, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
       const outline = new THREE.LineSegments(outlineGeom, outlineMat);
       outline.quaternion.copy(overlay.quaternion);
       outline.position.copy(overlay.position);
@@ -500,7 +500,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const mats = arrowMatsRef.current;
     Object.entries(mats).forEach(([id, mat]) => {
       const isHovered = hoveredArrow === id;
-      mat.color.set(isHovered ? 0xea580c : 0x222222);
+      mat.color.set(isHovered ? 0xfb923c : 0x222222);
       mat.opacity = isHovered ? 1 : 0.95;
       mat.needsUpdate = true;
     });
