@@ -605,33 +605,56 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
     return createGridfinityLip(layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize);
   }, [layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize, settings.gridfinityBase]);
 
-  // Materials (Premium RapidTool Sky Blue)
-  const holderMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: 0x0ea5e9, // Brand Sky Blue
-      roughness: 0.4,
-      metalness: 0.1,
-      side: THREE.FrontSide,
-    });
-  }, []);
+  // Dynamic materials based on materialPreset ('eva-foam' | 'charcoal' | 'sky-blue' | 'orange')
+  const { holderMaterial, basePlateMaterial, gridfinityMaterial } = useMemo(() => {
+    const preset = settings.materialPreset || 'eva-foam';
+    let holderColor = 0x1e293b; // Default EVA top: dark slate
+    let baseColor = 0xf97316;   // Default EVA bottom: brand orange
+    let holderRoughness = 0.6;
+    let holderMetalness = 0.05;
+    let baseRoughness = 0.4;
+    let baseMetalness = 0.1;
 
-  const basePlateMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: 0x1e293b, // Dark slate
-      roughness: 0.5,
-      metalness: 0.2,
-      side: THREE.FrontSide,
-    });
-  }, []);
+    if (preset === 'charcoal') {
+      holderColor = 0x27272a;
+      baseColor = 0x0f172a;
+      holderRoughness = 0.5;
+      baseRoughness = 0.6;
+    } else if (preset === 'sky-blue') {
+      holderColor = 0x0ea5e9;
+      baseColor = 0x1e293b;
+      holderRoughness = 0.4;
+      baseRoughness = 0.5;
+      baseMetalness = 0.2;
+    } else if (preset === 'orange') {
+      holderColor = 0xf97316;
+      baseColor = 0x27272a;
+      holderRoughness = 0.4;
+      baseRoughness = 0.5;
+      baseMetalness = 0.2;
+    }
 
-  const gridfinityMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: 0x0f172a, // Deep slate
-      roughness: 0.6,
-      metalness: 0.1,
-      side: THREE.DoubleSide,
-    });
-  }, []);
+    return {
+      holderMaterial: new THREE.MeshStandardMaterial({
+        color: holderColor,
+        roughness: holderRoughness,
+        metalness: holderMetalness,
+        side: THREE.FrontSide,
+      }),
+      basePlateMaterial: new THREE.MeshStandardMaterial({
+        color: baseColor,
+        roughness: baseRoughness,
+        metalness: baseMetalness,
+        side: THREE.FrontSide,
+      }),
+      gridfinityMaterial: new THREE.MeshStandardMaterial({
+        color: preset === 'charcoal' ? 0x090d16 : 0x0f172a,
+        roughness: 0.6,
+        metalness: 0.1,
+        side: THREE.DoubleSide,
+      }),
+    };
+  }, [settings.materialPreset]);
   
   return (
     <group ref={meshRef} rotation={[-Math.PI / 2, 0, 0]}>
@@ -968,21 +991,6 @@ export const ExportWorkspace: React.FC = () => {
   
   return (
     <div className="h-full flex flex-col bg-[hsl(var(--workspace-bg))]">
-      {/* Top Info Bar */}
-      <div className="absolute top-4 left-4 z-10 flex items-center gap-3 bg-[hsl(var(--card))/95] backdrop-blur-sm border border-[hsl(var(--border))] rounded-lg px-3 py-2 shadow-sm">
-        {exportFormat === 'stl' ? (
-          <Box className="w-4 h-4 text-[hsl(var(--primary))]" />
-        ) : (
-          <FileCode className="w-4 h-4 text-[hsl(var(--primary))]" />
-        )}
-        <span className="text-xs font-medium">
-          Export Preview ({exportFormat.toUpperCase()})
-        </span>
-        <div className="w-px h-4 bg-[hsl(var(--border))]" />
-        <span className="text-xs text-[hsl(var(--muted-foreground))]">
-          {layoutWidth.toFixed(1)} × {layoutHeight.toFixed(1)} × {totalHeight.toFixed(1)} mm
-        </span>
-      </div>
       
       {/* Main Preview Area */}
       <div className="flex-1">

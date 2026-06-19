@@ -61,6 +61,7 @@ export interface DesignSettings {
   cutoutDepth: number;     // Depth of tool cutouts (mm)
   chamferSize: number;     // Chamfer on edges (mm)
   gridfinityBase: boolean; // Whether to include gridfinity base pattern
+  materialPreset: 'eva-foam' | 'charcoal' | 'sky-blue' | 'orange';
 }
 
 export interface AppState {
@@ -177,6 +178,7 @@ const DEFAULT_DESIGN_SETTINGS: DesignSettings = {
   cutoutDepth: 15,
   chamferSize: 2,
   gridfinityBase: true,
+  materialPreset: 'eva-foam',
 };
 
 // ============================================================================

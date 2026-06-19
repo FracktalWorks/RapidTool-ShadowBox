@@ -248,15 +248,15 @@ export const WorkflowShell: React.FC = () => {
   return (
     <div className="h-screen flex flex-col overflow-hidden">
       {/* ── Header ───────────────────────────────────────────────────────── */}
-      <header className="h-14 flex items-center justify-between px-4 border-b border-border/60 tech-glass">
+      <header className="h-14 flex items-center justify-between px-4 border-b border-border/50 tech-glass">
         {/* Left */}
         <div className="flex items-center gap-4">
           <RapidToolLogo productName="tooltrace" icon={<Wrench className="w-4 h-4 text-amber-500 flex-shrink-0" />} />
           <div className="w-px h-6 bg-border/50" />
             <div className="flex items-center gap-2">
               <button onClick={handleReset} title="Reset session"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold text-black dark:text-white hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer">
-                <RotateCcw className="w-3.5 h-3.5 mr-0.5" /> Reset
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-medium text-foreground hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer">
+                <RotateCcw className="w-4 h-4 mr-0.5" /> Reset
               </button>
             <div className="w-px h-6 bg-border/50" />
             <div className="flex items-center gap-1">
@@ -268,7 +268,7 @@ export const WorkflowShell: React.FC = () => {
               </button>
             </div>
             <div className="w-px h-6 bg-border/50" />
-              <button className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="Restart Tutorial">
+              <button className="w-8 h-8 flex items-center justify-center rounded-md text-foreground hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="Restart Tutorial">
                 <HelpCircle className="w-4 h-4" />
               </button>
           </div>
@@ -277,13 +277,13 @@ export const WorkflowShell: React.FC = () => {
         {/* Center — project name + file session controls */}
         <div className="flex items-center gap-4 absolute left-1/2 -translate-x-1/2">
           <div className="flex items-center gap-1">
-            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="New design file">
+            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-foreground hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="New design file">
               <FolderPlus className="w-4 h-4" />
             </button>
-            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="Open .rapidtool file">
+            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-foreground hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="Open .rapidtool file">
               <FolderOpen className="w-4 h-4" />
             </button>
-            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="Save now">
+            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-foreground hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer" title="Save now">
               <Save className="w-4 h-4" />
             </button>
           </div>
@@ -296,7 +296,7 @@ export const WorkflowShell: React.FC = () => {
                 className="bg-muted/50 border border-border rounded px-2 py-0.5 text-sm font-tech w-48 focus:outline-none focus:ring-1 focus:ring-primary" />
             ) : (
               <span onDoubleClick={startEditingName} title="Double-click to rename"
-                className="text-black dark:text-white cursor-pointer hover:text-primary transition-colors px-2 py-0.5 rounded hover:bg-muted/30 font-medium">
+                className="text-foreground cursor-pointer hover:text-primary transition-colors px-2 py-0.5 rounded hover:bg-muted/30 font-medium">
                 {projectName}
               </span>
             )}
@@ -314,14 +314,14 @@ export const WorkflowShell: React.FC = () => {
           <div className="flex items-center gap-1">
             {VIEW_BUTTONS.map(({ o, Icon, cls, title }) => (
               <button key={o} onClick={() => handleOrientation(o)} title={title}
-                className="w-8 h-8 flex items-center justify-center rounded-md text-black dark:text-white hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer">
+                className="w-8 h-8 flex items-center justify-center rounded-md text-foreground hover:bg-accent hover:text-accent-foreground tech-transition cursor-pointer">
                 <Icon className={`w-4 h-4 ${cls}`} />
               </button>
             ))}
           </div>
           <div className="w-px h-6 bg-border/50" />
           {/* Mapped as outline button to match Fixture style */}
-          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border text-black dark:text-white hover:bg-accent hover:text-accent-foreground hover:border-accent tech-transition shadow-sm cursor-pointer" title="Toggle theme">
+          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground hover:border-accent tech-transition shadow-sm cursor-pointer" title="Toggle theme">
             {theme === 'light' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
         </div>

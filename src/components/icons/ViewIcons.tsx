@@ -13,7 +13,7 @@ interface IconProps {
 
 /** Isometric view icon with right face filled */
 export const IconIsoFace: React.FC<IconProps> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <polygon points="12,4 19,8 12,12 5,8" fill="none" />
     <polygon points="5,8 12,12 12,20 5,16" fill="none" />
     <polygon points="19,8 12,12 12,20 19,16" fill="currentColor" />
@@ -25,7 +25,7 @@ export const IconIsoFace: React.FC<IconProps> = ({ className }) => (
 
 /** Isometric view icon with top face filled */
 export const IconIsoTop: React.FC<IconProps> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <polygon points="12,4 19,8 12,12 5,8" fill="currentColor" />
     <polygon points="5,8 12,12 12,20 5,16" fill="none" />
     <polygon points="19,8 12,12 12,20 19,16" fill="none" />
@@ -36,7 +36,7 @@ export const IconIsoTop: React.FC<IconProps> = ({ className }) => (
 
 /** Isometric view icon with left face filled */
 export const IconIsoLeftFace: React.FC<IconProps> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <polygon points="12,4 19,8 12,12 5,8" fill="none" />
     <polygon points="5,8 12,12 12,20 5,16" fill="currentColor" />
     <polygon points="19,8 12,12 12,20 19,16" fill="none" />
@@ -48,7 +48,7 @@ export const IconIsoLeftFace: React.FC<IconProps> = ({ className }) => (
 
 /** Isometric corner view icon - all three faces shaded (3D perspective) */
 export const IconIsoCorner: React.FC<IconProps> = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <polygon points="12,4 19,8 12,12 5,8" fill="currentColor" fillOpacity="0.3" />
     <polygon points="5,8 12,12 12,20 5,16" fill="currentColor" fillOpacity="0.5" />
     <polygon points="19,8 12,12 12,20 19,16" fill="currentColor" fillOpacity="0.7" />

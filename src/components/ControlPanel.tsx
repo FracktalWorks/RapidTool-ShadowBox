@@ -1660,6 +1660,32 @@ const DesignStepPanel: React.FC = () => {
           </div>
         </div>
 
+        {/* Material Preset */}
+        <div className="space-y-2">
+          <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">
+            Tray Material / Color
+          </label>
+          <select
+            value={designSettings.materialPreset || 'eva-foam'}
+            onChange={(e) =>
+              updateDesignSettings({
+                materialPreset: e.target.value as any,
+              })
+            }
+            className="
+              w-full h-9 px-3 rounded-xl border border-[hsl(var(--border))]
+              bg-[hsl(var(--background))] text-foreground text-[13px]
+              focus:outline-none focus:border-[hsl(var(--primary))] transition-colors
+              cursor-pointer font-medium
+            "
+          >
+            <option value="eva-foam">EVA Foam (Dual-Tone Orange)</option>
+            <option value="charcoal">Stealth Charcoal (Matte)</option>
+            <option value="sky-blue">Tough PLA (Sky Blue)</option>
+            <option value="orange">Signature Orange (Vivid)</option>
+          </select>
+        </div>
+
         {/* Gridfinity Base Toggle */}
         <div className="flex items-center justify-between p-3 border border-[hsl(var(--border))] rounded-xl">
           <div>

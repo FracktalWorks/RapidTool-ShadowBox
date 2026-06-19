@@ -106,7 +106,7 @@ const baseStyles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     transition: 'all 0.15s ease',
     backgroundColor: 'transparent',
-    color: 'var(--sidebar-icon-fg, var(--foreground, #374151))',
+    color: 'var(--sidebar-icon-fg, var(--color-foreground, hsl(var(--foreground, 222.2 84% 4.9%))))',
     position: 'relative',
     flexShrink: 0,
     gap: '8px',
@@ -238,8 +238,8 @@ export const SidebarIcon: React.FC<SidebarIconProps> = ({
 
   const handleMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
     if (!active && !disabled) {
-      e.currentTarget.style.backgroundColor = 'var(--sidebar-icon-hover-bg, rgba(59, 130, 246, 0.1))';
-      e.currentTarget.style.color = 'var(--sidebar-icon-hover-fg, var(--primary, #3b82f6))';
+      e.currentTarget.style.backgroundColor = 'var(--sidebar-icon-hover-bg, hsl(var(--accent, 27 96% 61%) / 0.15))';
+      e.currentTarget.style.color = 'var(--sidebar-icon-hover-fg, hsl(var(--accent, 27 96% 61%)))';
     }
   };
 
@@ -248,7 +248,7 @@ export const SidebarIcon: React.FC<SidebarIconProps> = ({
       e.currentTarget.style.backgroundColor = variant === 'filled' 
         ? 'var(--sidebar-icon-filled-bg, rgba(0, 0, 0, 0.05))'
         : 'transparent';
-      e.currentTarget.style.color = 'var(--sidebar-icon-fg, var(--foreground, #374151))';
+      e.currentTarget.style.color = 'var(--sidebar-icon-fg, var(--color-foreground, hsl(var(--foreground, 222.2 84% 4.9%))))';
     }
   };
 

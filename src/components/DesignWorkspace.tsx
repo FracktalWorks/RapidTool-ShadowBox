@@ -502,35 +502,56 @@ const ToolHolderMesh: React.FC<ToolHolderMeshProps> = ({
     return createGridfinityLip(layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize);
   }, [layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize, settings.gridfinityBase]);
 
-  // Material for the holder walls and inner parts (Premium RapidTool Sky Blue)
-  const holderMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: 0x0ea5e9, // Brand Sky Blue
-      roughness: 0.4,
-      metalness: 0.1,
-      side: THREE.FrontSide,
-    });
-  }, []);
+  // Dynamic materials based on materialPreset ('eva-foam' | 'charcoal' | 'sky-blue' | 'orange')
+  const { holderMaterial, basePlateMaterial, gridfinityMaterial } = useMemo(() => {
+    const preset = settings.materialPreset || 'eva-foam';
+    let holderColor = 0x1e293b; // Default EVA top: dark slate
+    let baseColor = 0xf97316;   // Default EVA bottom: brand orange
+    let holderRoughness = 0.6;
+    let holderMetalness = 0.05;
+    let baseRoughness = 0.4;
+    let baseMetalness = 0.1;
 
-  // Material for the base plate (dark slate for contrast)
-  const basePlateMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: 0x1e293b, // Dark slate
-      roughness: 0.5,
-      metalness: 0.2,
-      side: THREE.FrontSide,
-    });
-  }, []);
+    if (preset === 'charcoal') {
+      holderColor = 0x27272a;
+      baseColor = 0x0f172a;
+      holderRoughness = 0.5;
+      baseRoughness = 0.6;
+    } else if (preset === 'sky-blue') {
+      holderColor = 0x0ea5e9;
+      baseColor = 0x1e293b;
+      holderRoughness = 0.4;
+      baseRoughness = 0.5;
+      baseMetalness = 0.2;
+    } else if (preset === 'orange') {
+      holderColor = 0xf97316;
+      baseColor = 0x27272a;
+      holderRoughness = 0.4;
+      baseRoughness = 0.5;
+      baseMetalness = 0.2;
+    }
 
-  // Material for gridfinity holes (darker slate)
-  const gridfinityMaterial = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: 0x0f172a, // Deep slate
-      roughness: 0.6,
-      metalness: 0.1,
-      side: THREE.DoubleSide,
-    });
-  }, []);
+    return {
+      holderMaterial: new THREE.MeshStandardMaterial({
+        color: holderColor,
+        roughness: holderRoughness,
+        metalness: holderMetalness,
+        side: THREE.FrontSide,
+      }),
+      basePlateMaterial: new THREE.MeshStandardMaterial({
+        color: baseColor,
+        roughness: baseRoughness,
+        metalness: baseMetalness,
+        side: THREE.FrontSide,
+      }),
+      gridfinityMaterial: new THREE.MeshStandardMaterial({
+        color: preset === 'charcoal' ? 0x090d16 : 0x0f172a,
+        roughness: 0.6,
+        metalness: 0.1,
+        side: THREE.DoubleSide,
+      }),
+    };
+  }, [settings.materialPreset]);
 
   // Rest the whole assembly ON the bed: the Gridfinity feet hang below z=0, so
   // after rotation they'd dip under the grid. Lift the group by its lowest point
@@ -807,20 +828,6 @@ export const DesignWorkspace: React.FC = () => {
       {/* Navigation help (shared cad-ui overlay, same as Fixture) */}
       <NavigationHelp storageKey="fixture-view-nav-tooltip-dismissed" />
 
-      {/* Design Info */}
-      <div className="absolute top-4 left-4 flex items-center gap-3 bg-[hsl(var(--card))/90] backdrop-blur-sm border border-[hsl(var(--border))] rounded-lg px-3 py-1.5 shadow-sm">
-        <span className="text-xs font-tech text-[hsl(var(--muted-foreground))]">
-          {grid.cols * grid.cellWidthMm} × {grid.rows * grid.cellHeightMm} mm
-        </span>
-        <div className="w-px h-3 bg-[hsl(var(--border))]" />
-        <span className="text-xs text-[hsl(var(--muted-foreground))]">
-          {layoutState.shapes.length} cutout{layoutState.shapes.length !== 1 ? 's' : ''}
-        </span>
-        <div className="w-px h-3 bg-[hsl(var(--border))]" />
-        <span className="text-xs text-[hsl(var(--muted-foreground))]">
-          Depth: {designSettings.cutoutDepth}mm
-        </span>
-      </div>
     </div>
   );
 };
