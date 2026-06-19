@@ -315,7 +315,7 @@ export const WorkflowShell: React.FC = () => {
           <div className="w-px h-6 bg-border/50" />
             <div className="flex items-center gap-2">
               <button onClick={handleReset} title="Reset session"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer">
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer">
                 <RotateCcw className="w-3.5 h-3.5 mr-0.5" /> Reset
               </button>
             <div className="w-px h-6 bg-border/50" />
@@ -328,7 +328,7 @@ export const WorkflowShell: React.FC = () => {
               </button>
             </div>
             <div className="w-px h-6 bg-border/50" />
-              <button className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="Restart Tutorial">
+              <button className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Restart Tutorial">
                 <HelpCircle className="w-4 h-4" />
               </button>
           </div>
@@ -337,13 +337,13 @@ export const WorkflowShell: React.FC = () => {
         {/* Center — project name + file session controls */}
         <div className="flex items-center gap-4 absolute left-1/2 -translate-x-1/2">
           <div className="flex items-center gap-1">
-            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="New design file">
+            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="New design file">
               <FolderPlus className="w-4 h-4" />
             </button>
-            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="Open .rapidtool file">
+            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Open .rapidtool file">
               <FolderOpen className="w-4 h-4" />
             </button>
-            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="Save now">
+            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer" title="Save now">
               <Save className="w-4 h-4" />
             </button>
           </div>
@@ -374,14 +374,14 @@ export const WorkflowShell: React.FC = () => {
           <div className="flex items-center gap-1">
             {VIEW_BUTTONS.map(({ o, Icon, cls, title }) => (
               <button key={o} onClick={() => handleOrientation(o)} title={title}
-                className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer">
+                className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-orange-500 tech-transition cursor-pointer">
                 <Icon className={`w-4 h-4 ${cls}`} />
               </button>
             ))}
           </div>
           <div className="w-px h-6 bg-border/50" />
           {/* Mapped as outline button to match Fixture style */}
-          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border hover:bg-[hsl(var(--primary))] hover:text-white hover:border-[hsl(var(--primary))] tech-transition shadow-sm cursor-pointer" title="Toggle theme">
+          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border hover:bg-orange-500 hover:text-white hover:border-orange-500 tech-transition shadow-sm cursor-pointer" title="Toggle theme">
             {theme === 'light' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
         </div>
@@ -559,8 +559,7 @@ export const WorkflowShell: React.FC = () => {
                     <div className="mt-2 pt-2 border-t border-[hsl(var(--border))/50]">
                       <button
                         onClick={() => handleStepClick(nextCfg.step)}
-                        className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold font-tech text-white transition-all shadow-sm w-full cursor-pointer"
-                        style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-btn)' }}
+                        className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold font-tech text-white bg-orange-500 hover:bg-orange-600 active:bg-orange-700 transition-all shadow-sm w-full cursor-pointer"
                       >
                         <span>→</span>
                         <span>Next: {nextCfg.label}</span>
