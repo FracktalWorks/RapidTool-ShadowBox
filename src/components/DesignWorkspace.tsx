@@ -502,32 +502,32 @@ const ToolHolderMesh: React.FC<ToolHolderMeshProps> = ({
     return createGridfinityLip(layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize);
   }, [layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize, settings.gridfinityBase]);
 
-  // Material for the holder walls and inner parts
+  // Material for the holder walls and inner parts (Premium RapidTool Sky Blue)
   const holderMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: 0x707070,
-      roughness: 0.5,
+      color: 0x0ea5e9, // Brand Sky Blue
+      roughness: 0.4,
       metalness: 0.1,
       side: THREE.FrontSide,
     });
   }, []);
 
-  // Material for the base plate (black for visibility)
+  // Material for the base plate (dark slate for contrast)
   const basePlateMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: 0x000000,
-      roughness: 0.4,
+      color: 0x1e293b, // Dark slate
+      roughness: 0.5,
       metalness: 0.2,
       side: THREE.FrontSide,
     });
   }, []);
 
-  // Material for gridfinity holes (darker)
+  // Material for gridfinity holes (darker slate)
   const gridfinityMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: 0x404040,
-      roughness: 0.7,
-      metalness: 0,
+      color: 0x0f172a, // Deep slate
+      roughness: 0.6,
+      metalness: 0.1,
       side: THREE.DoubleSide,
     });
   }, []);

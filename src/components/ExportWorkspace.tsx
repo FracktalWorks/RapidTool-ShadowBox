@@ -605,11 +605,11 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
     return createGridfinityLip(layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize);
   }, [layoutWidth, layoutHeight, settings.wallThickness, settings.chamferSize, settings.gridfinityBase]);
 
-  // Materials
+  // Materials (Premium RapidTool Sky Blue)
   const holderMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: 0x707070,
-      roughness: 0.5,
+      color: 0x0ea5e9, // Brand Sky Blue
+      roughness: 0.4,
       metalness: 0.1,
       side: THREE.FrontSide,
     });
@@ -617,8 +617,8 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
 
   const basePlateMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: 0x000000,
-      roughness: 0.4,
+      color: 0x1e293b, // Dark slate
+      roughness: 0.5,
       metalness: 0.2,
       side: THREE.FrontSide,
     });
@@ -626,9 +626,9 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
 
   const gridfinityMaterial = useMemo(() => {
     return new THREE.MeshStandardMaterial({
-      color: 0x404040,
-      roughness: 0.7,
-      metalness: 0,
+      color: 0x0f172a, // Deep slate
+      roughness: 0.6,
+      metalness: 0.1,
       side: THREE.DoubleSide,
     });
   }, []);
@@ -1019,30 +1019,9 @@ export const ExportWorkspace: React.FC = () => {
         )}
       </div>
       
-      {/* Bottom Controls */}
-      <div className="absolute bottom-4 right-4 flex items-center gap-2">
-        {exportFormat === 'stl' && (
-          <button
-            onClick={handleResetView}
-            className="h-9 px-3 bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-lg flex items-center gap-2 text-xs font-medium hover:bg-[hsl(var(--muted))] transition-colors"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reset View
-          </button>
-        )}
-        <button
-          onClick={handleExport}
-          className="h-9 px-4 text-white rounded-lg flex items-center gap-2 text-xs font-semibold transition-all hover:opacity-90 active:scale-95"
-          style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-btn)' }}
-        >
-          <Download className="w-3.5 h-3.5" />
-          Export {exportFormat.toUpperCase()}
-        </button>
-      </div>
-
       {/* Graceful export error (no blocking alert) */}
       {exportError && (
-        <div className="absolute bottom-16 right-4 z-20 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-white bg-[hsl(var(--destructive))] shadow-lg">
+        <div className="absolute bottom-4 right-4 z-20 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-white bg-[hsl(var(--destructive))] shadow-lg">
           <AlertCircle className="w-3.5 h-3.5" />
           {exportError}
         </div>
