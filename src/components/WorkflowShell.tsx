@@ -47,13 +47,69 @@ interface StepConfig {
   description: string;
   icon: React.ReactNode;
   IconComponent: React.ComponentType<{ className?: string }>;
+  helpText: string[];
 }
 const stepConfigs: StepConfig[] = [
-  { step: 'paper',  label: 'Detect Paper',     description: 'Upload and calibrate image scale', icon: <FileText className="w-4 h-4" />, IconComponent: FileText },
-  { step: 'tools',  label: 'Trace Tools',      description: 'Extract tool contour boundaries', icon: <Wrench className="w-4 h-4" />, IconComponent: Wrench },
-  { step: 'layout', label: 'Configure Layout', description: 'Arrange pocket layouts on baseplate', icon: <LayoutGrid className="w-4 h-4" />, IconComponent: LayoutGrid },
-  { step: 'design', label: '3D Design',        description: 'Configure holder height and thickness', icon: <Box className="w-4 h-4" />, IconComponent: Box },
-  { step: 'export', label: 'Export',           description: 'Save as SVG or 3D STL file', icon: <Download className="w-4 h-4" />, IconComponent: Download },
+  { 
+    step: 'paper',  
+    label: 'Detect Paper',     
+    description: 'Upload and calibrate image scale', 
+    icon: <FileText className="w-4 h-4" />, 
+    IconComponent: FileText,
+    helpText: [
+      'Double-click the name on the title bar to rename your project',
+      'Upload a clear photo of tools placed on standard white A4 paper',
+      'Adjust corner handles manually if auto-detection misses the paper edges'
+    ]
+  },
+  { 
+    step: 'tools',  
+    label: 'Trace Tools',      
+    description: 'Extract tool contour boundaries', 
+    icon: <Wrench className="w-4 h-4" />, 
+    IconComponent: Wrench,
+    helpText: [
+      'Use Auto Detect to extract all tool boundaries at once using AI/SOD models',
+      'Use Click Trace to capture individual tools by clicking inside their shapes',
+      'Select a tool and use Refine Edges (Left-click / Shift-click) to repair details'
+    ]
+  },
+  { 
+    step: 'layout', 
+    label: 'Configure Layout', 
+    description: 'Arrange pocket layouts on baseplate', 
+    icon: <LayoutGrid className="w-4 h-4" />, 
+    IconComponent: LayoutGrid,
+    helpText: [
+      'Set columns and rows to define the Gridfinity or custom tray cell division',
+      'Drag and rotate pockets within the layout boundaries to optimize spacing',
+      'Add finger notches to allow easy retrieval of tools from their cutouts'
+    ]
+  },
+  { 
+    step: 'design', 
+    label: '3D Design',        
+    description: 'Configure holder height and thickness', 
+    icon: <Box className="w-4 h-4" />, 
+    IconComponent: Box,
+    helpText: [
+      'Adjust Cutout Depth to match the thickness of your tools',
+      'Toggle Gridfinity Base to generate standard interlocking mounting feet at the bottom',
+      'Rotate and zoom the 3D model to inspect wall thickness and edge chamfering'
+    ]
+  },
+  { 
+    step: 'export', 
+    label: 'Export',           
+    description: 'Save as SVG or 3D STL file', 
+    icon: <Download className="w-4 h-4" />, 
+    IconComponent: Download,
+    helpText: [
+      'Select SVG format to export vector outlines for laser cutting or drawer liners',
+      'Select STL format to export a watertight 3D print-ready model',
+      'Check the dimensions summary on the left to verify your drawer space'
+    ]
+  },
 ];
 const stepOrder = stepConfigs.map((c) => c.step);
 
@@ -127,6 +183,7 @@ export const WorkflowShell: React.FC = () => {
   const [prereqModal, setPrereqModal] = useState<{ isOpen: boolean; targetStep: WorkflowStep | null; incompleteSteps: StepConfig[] }>(
     { isOpen: false, targetStep: null, incompleteSteps: [] }
   );
+  const [isTipsVisible, setIsTipsVisible] = useState(true);
 
   // ── Prerequisites (ported from Sidebar) ────────────────────────────────────
   const getIncompletePrerequisites = useCallback((step: WorkflowStep): StepConfig[] => {
@@ -155,6 +212,10 @@ export const WorkflowShell: React.FC = () => {
   useEffect(() => {
     if (currentStep === 'paper' && prereqModal.isOpen) setPrereqModal((p) => ({ ...p, isOpen: false }));
   }, [currentStep, prereqModal.isOpen]);
+
+  useEffect(() => {
+    setIsTipsVisible(true);
+  }, [currentStep]);
 
   // ── View orientation / reset → 3D viewport via events ──────────────────────
   const handleOrientation = useCallback((o: string) => {
@@ -252,11 +313,11 @@ export const WorkflowShell: React.FC = () => {
         <div className="flex items-center gap-4">
           <RapidToolLogo productName="tooltrace" icon={<Wrench className="w-4 h-4 text-amber-500 flex-shrink-0" />} />
           <div className="w-px h-6 bg-border/50" />
-          <div className="flex items-center gap-2">
-            <button onClick={handleReset} title="Reset session"
-              className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted tech-transition">
-              <RotateCcw className="w-3.5 h-3.5 mr-0.5" /> Reset
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={handleReset} title="Reset session"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer">
+                <RotateCcw className="w-3.5 h-3.5 mr-0.5" /> Reset
+              </button>
             <div className="w-px h-6 bg-border/50" />
             <div className="flex items-center gap-1">
               <button disabled className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground opacity-40 cursor-not-allowed">
@@ -267,22 +328,22 @@ export const WorkflowShell: React.FC = () => {
               </button>
             </div>
             <div className="w-px h-6 bg-border/50" />
-            <button className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="Restart Tutorial">
-              <HelpCircle className="w-4 h-4" />
-            </button>
+              <button className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="Restart Tutorial">
+                <HelpCircle className="w-4 h-4" />
+              </button>
           </div>
         </div>
 
         {/* Center — project name + file session controls */}
         <div className="flex items-center gap-4 absolute left-1/2 -translate-x-1/2">
           <div className="flex items-center gap-1">
-            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="New design file">
+            <button onClick={handleReset} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="New design file">
               <FolderPlus className="w-4 h-4" />
             </button>
-            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="Open .rapidtool file">
+            <button onClick={handleOpenSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="Open .rapidtool file">
               <FolderOpen className="w-4 h-4" />
             </button>
-            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition" title="Save now">
+            <button onClick={handleSaveSession} className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer" title="Save now">
               <Save className="w-4 h-4" />
             </button>
           </div>
@@ -313,14 +374,14 @@ export const WorkflowShell: React.FC = () => {
           <div className="flex items-center gap-1">
             {VIEW_BUTTONS.map(({ o, Icon, cls, title }) => (
               <button key={o} onClick={() => handleOrientation(o)} title={title}
-                className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted tech-transition">
+                className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground hover:text-white hover:bg-[hsl(var(--primary))] tech-transition cursor-pointer">
                 <Icon className={`w-4 h-4 ${cls}`} />
               </button>
             ))}
           </div>
           <div className="w-px h-6 bg-border/50" />
           {/* Mapped as outline button to match Fixture style */}
-          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border hover:bg-muted hover:text-foreground tech-transition shadow-sm" title="Toggle theme">
+          <button onClick={toggleTheme} className="w-8 h-8 flex items-center justify-center rounded-md border border-border hover:bg-[hsl(var(--primary))] hover:text-white hover:border-[hsl(var(--primary))] tech-transition shadow-sm cursor-pointer" title="Toggle theme">
             {theme === 'light' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
         </div>
@@ -469,6 +530,47 @@ export const WorkflowShell: React.FC = () => {
         <main className="flex-1 relative min-w-0 overflow-hidden">
           <ErrorBoundary>{renderWorkspace()}</ErrorBoundary>
           <LoadingOverlay isVisible={isProcessing} message={processingMessage || 'Processing...'} positioning="absolute" type="import" />
+
+          {/* Tips overlay */}
+          {(() => {
+            const cfg = stepConfigs.find(s => s.step === currentStep);
+            if (!cfg?.helpText?.length) return null;
+            const nextStep = stepOrder[stepOrder.indexOf(currentStep) + 1];
+            const nextCfg = nextStep ? stepConfigs.find(s => s.step === nextStep) : null;
+            
+            return (
+              <div className={`absolute top-4 left-4 z-10 max-w-xs transition-opacity duration-300 ${isTipsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+                <div className="relative tech-glass rounded-lg p-3 text-xs text-[hsl(var(--muted-foreground))] font-tech space-y-1.5 bg-[hsl(var(--background))/80] backdrop-blur-sm border border-[hsl(var(--border))/50] shadow-lg pr-6">
+                  <button onClick={() => setIsTipsVisible(false)} className="absolute top-2 right-2 p-0.5 text-[hsl(var(--muted-foreground))/50] hover:text-[hsl(var(--foreground))] transition-colors cursor-pointer">
+                    <X className="w-3 h-3" />
+                  </button>
+                  <p className="font-semibold text-[hsl(var(--foreground))] flex items-center gap-1.5">
+                    <span>💡</span> Tips
+                  </p>
+                  <ul className="space-y-1 ml-1">
+                    {cfg.helpText.map((tip, i) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <ChevronRight className="w-3 h-3 mt-0.5 flex-shrink-0 text-[hsl(var(--primary))]" />
+                        <span>{tip}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  {nextCfg && (
+                    <div className="mt-2 pt-2 border-t border-[hsl(var(--border))/50]">
+                      <button
+                        onClick={() => handleStepClick(nextCfg.step)}
+                        className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold font-tech text-white transition-all shadow-sm w-full cursor-pointer"
+                        style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-btn)' }}
+                      >
+                        <span>→</span>
+                        <span>Next: {nextCfg.label}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
         </main>
 
         {/* Right Properties panel */}
