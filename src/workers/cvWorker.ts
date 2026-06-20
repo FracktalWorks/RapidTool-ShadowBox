@@ -111,6 +111,40 @@ const orderCorners = (pts: Point2D[]): Point2D[] => {
   return [top[0], top[1], bot[1], bot[0]]; // TL, TR, BR, BL
 };
 
+// Robust 4-corner finder for a (possibly perspective) sheet: the extreme points of
+// the convex hull — TL=min(x+y), BR=max(x+y), TR=max(x−y), BL=min(x−y). This is the
+// standard document-scanner technique. Unlike cv.minAreaRect (which fits a RECTANGLE
+// and so mis-places corners on a tilted/trapezoidal sheet) it returns the true quad,
+// and unlike approxPolyDP it doesn't depend on a fragile epsilon. Returns TL,TR,BR,BL.
+const extremeQuadCorners = (contour: any): Point2D[] | null => {
+  const hull = new cv.Mat();
+  cv.convexHull(contour, hull, false, true); // returnPoints = true → CV_32SC2
+  const n = hull.rows;
+  if (n < 4) { hull.delete(); return null; }
+  let tl: Point2D | null = null, tr: Point2D | null = null, br: Point2D | null = null, bl: Point2D | null = null;
+  let minSum = Infinity, maxSum = -Infinity, minDiff = Infinity, maxDiff = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const x = hull.data32S[i * 2], y = hull.data32S[i * 2 + 1];
+    const sum = x + y, diff = x - y;
+    if (sum < minSum) { minSum = sum; tl = { x, y }; }
+    if (sum > maxSum) { maxSum = sum; br = { x, y }; }
+    if (diff > maxDiff) { maxDiff = diff; tr = { x, y }; }
+    if (diff < minDiff) { minDiff = diff; bl = { x, y }; }
+  }
+  hull.delete();
+  return tl && tr && br && bl ? [tl, tr, br, bl] : null;
+};
+
+// Quadrilateral area (shoelace) for ordered TL,TR,BR,BL corners.
+const quadArea = (q: Point2D[]): number => {
+  let a = 0;
+  for (let i = 0; i < q.length; i++) {
+    const j = (i + 1) % q.length;
+    a += q[i].x * q[j].y - q[j].x * q[i].y;
+  }
+  return Math.abs(a) / 2;
+};
+
 // Compute median of grayscale image for auto-tuned Canny
 function computeMedian(gray: any): number {
   const hist = new cv.Mat();
@@ -588,82 +622,38 @@ function findBestQuadrilateral(binary: any, totalArea: number): { points: Point2
       continue;
     }
 
-    const peri = cv.arcLength(contour, true);
-    const approx = new cv.Mat();
-    // Slightly smoother approximation (0.03 instead of 0.02)
-    cv.approxPolyDP(contour, approx, 0.03 * peri, true);
+    // Robust corners via convex-hull extreme points (handles perspective trapezoids;
+    // no fragile epsilon, no rectangle-forcing minAreaRect, no TR-clamp band-aid).
+    const corners = extremeQuadCorners(contour);
+    if (!corners) { contour.delete(); continue; }
+    const ordered = orderCorners(corners);
 
-    if (approx.rows === 4) {
-      const points: Point2D[] = [];
-      for (let j = 0; j < 4; j++) {
-        points.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
-      }
+    const w = (dist(ordered[0], ordered[1]) + dist(ordered[3], ordered[2])) / 2;
+    const h = (dist(ordered[0], ordered[3]) + dist(ordered[1], ordered[2])) / 2;
+    if (w < 10 || h < 10) { contour.delete(); continue; }
+    const aspect = Math.max(w, h) / Math.min(w, h);
 
-      // Quality metrics
-      const isConvex = cv.isContourConvex(approx);
-      const solidity = calculateSolidity(contour);
-      const rectangularity = calculateRectangularity(contour);
+    const solidity = calculateSolidity(contour);
+    const rectangularity = calculateRectangularity(contour);
 
-      const ordered = orderCorners(points);
-      const w = (dist(ordered[0], ordered[1]) + dist(ordered[3], ordered[2])) / 2;
-      const h = (dist(ordered[0], ordered[3]) + dist(ordered[1], ordered[2])) / 2;
-      const aspect = Math.max(w, h) / Math.min(w, h);
+    // How well the 4 corners explain the contour: a clean sheet's contour fills its
+    // own corner-quad (~1); a wiggly/wrong blob fills much less, so it scores low.
+    const qa = quadArea(ordered);
+    const fillScore = qa > 0 ? Math.min(contourArea / qa, 1) : 0;
 
-      // Confidence scoring
-      const aspectScore = Math.max(0, 1 - Math.abs(aspect - A4_ASPECT) / 0.5) * 0.30;
-      const areaScore = Math.min(contourArea / totalArea / 0.3, 1) * 0.25;
-      const convexScore = isConvex ? 0.15 : 0;
-      const solidityScore = solidity * 0.15;
-      const rectScore = rectangularity * 0.15;
+    // Confidence — perspective-tolerant (aspect weighted modestly so a tilted but
+    // correctly-cornered sheet isn't penalised for foreshortening).
+    const aspectScore = Math.max(0, 1 - Math.abs(aspect - A4_ASPECT) / 0.6) * 0.20;
+    const areaScore = Math.min(contourArea / totalArea / 0.3, 1) * 0.20;
+    const solidityScore = solidity * 0.20;
+    const rectScore = rectangularity * 0.15;
+    const fillS = fillScore * 0.25;
+    const confidence = aspectScore + areaScore + solidityScore + rectScore + fillS;
 
-      const confidence = aspectScore + areaScore + convexScore + solidityScore + rectScore;
-
-      if (confidence > 0.4 && (!best || confidence > best.confidence)) {
-        best = { points: ordered, confidence };
-      }
-    } else {
-      // FALLBACK for non-perfect quads: Use the vertices of the minimum area rectangle
-      // We use the Convex Hull first to stabilize the contour
-      const hull = new cv.Mat();
-      cv.convexHull(contour, hull);
-      const rotatedRect = cv.minAreaRect(hull);
-      hull.delete();
-
-      const vertices = cv.RotatedRect.points(rotatedRect);
-
-      let points: Point2D[] = [];
-      for (let j = 0; j < 4; j++) {
-        points.push({ x: vertices[j].x, y: vertices[j].y });
-      }
-
-      // Final sanity fix for the TR corner:
-      // If a point is literally touching the very top or very right edge of the image,
-      // it's likely noise. We clamp it back toward the other points.
-      const margin = 5;
-      const w = binary.cols;
-      const h = binary.rows;
-
-      points = points.map(p => ({
-        x: p.x >= w - margin ? p.x - margin * 4 : (p.x <= margin ? p.x + margin * 4 : p.x),
-        y: p.y <= margin ? p.y + margin * 4 : (p.y >= h - margin ? p.y - margin * 4 : p.y)
-      }));
-
-      const ordered = orderCorners(points);
-      const solidity = calculateSolidity(contour);
-      const rectangularity = calculateRectangularity(contour);
-
-      // Only accept if it looks reasonably like a solid rectangle
-      if (solidity > 0.8 && rectangularity > 0.65) {
-        const areaScore = Math.min(contourArea / totalArea / 0.3, 1) * 0.4;
-        const confidence = areaScore + (solidity * 0.3) + (rectangularity * 0.2);
-
-        if (confidence > 0.45 && (!best || confidence > best.confidence)) {
-          best = { points: ordered, confidence };
-        }
-      }
+    if (confidence > 0.4 && (!best || confidence > best.confidence)) {
+      best = { points: ordered, confidence };
     }
 
-    approx.delete();
     contour.delete();
   }
 
