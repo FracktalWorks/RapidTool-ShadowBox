@@ -447,6 +447,29 @@ function autoTunedCanny(blurred: any, sigma = 0.33): any {
 // Paper Detection (Enhanced)
 // ============================================================================
 
+// Snap the (mask-derived) corners to the true paper-edge intersection at sub-pixel
+// precision using the grayscale image gradient. The mask boundary can sit a few px
+// off the real edge (morphology); this corrects it so the A4 scale + warp are exact.
+// Guarded: a refinement that drifts too far (latched onto the tool/noise) is rejected.
+function refineCornersSubPix(gray: any, corners: Point2D[]): Point2D[] {
+  let pts: any = null;
+  try {
+    pts = cv.matFromArray(corners.length, 1, cv.CV_32FC2, corners.flatMap((p) => [p.x, p.y]));
+    const type = (cv.TermCriteria_COUNT ?? 1) + (cv.TermCriteria_EPS ?? 2);
+    cv.cornerSubPix(gray, pts, new cv.Size(11, 11), new cv.Size(-1, -1), new cv.TermCriteria(type, 40, 0.001));
+    const limit = 0.015 * Math.max(gray.cols, gray.rows); // reject >1.5% drift
+    return corners.map((c, i) => {
+      const rx = pts.data32F[i * 2], ry = pts.data32F[i * 2 + 1];
+      return Math.hypot(rx - c.x, ry - c.y) <= limit ? { x: rx, y: ry } : c;
+    });
+  } catch (e) {
+    console.warn('cornerSubPix refine skipped:', e instanceof Error ? e.message : e);
+    return corners;
+  } finally {
+    pts?.delete?.();
+  }
+}
+
 function detectPaper(imageData: ImageData) {
   console.log('Detecting paper...', imageData.width, 'x', imageData.height);
   const src = cv.matFromImageData(imageData);
@@ -466,15 +489,14 @@ function detectPaper(imageData: ImageData) {
     }
   }
 
-  deleteMats(src, gray);
-
-
-
   if (!best || best.confidence < 0.2) {
+    deleteMats(src, gray);
     return { detected: false, confidence: 0, corners: null, pixelsPerMm: null, message: 'No paper detected' };
   }
 
-  const [tl, tr, br, bl] = orderCorners(best.points);
+  // Sub-pixel snap to the true paper edges (uses gray; must run before it's freed).
+  const [tl, tr, br, bl] = refineCornersSubPix(gray, orderCorners(best.points));
+  deleteMats(src, gray);
   const corners: PaperCorners = { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl };
 
   const avgW = (dist(tl, tr) + dist(bl, br)) / 2;
