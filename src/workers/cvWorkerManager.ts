@@ -232,6 +232,18 @@ export async function traceMask(
   return request<ToolTracingResult[]>('traceMask', { mask, width, height, rgba }, transfer);
 }
 
+/**
+ * Skew-correct a photo to a flat, true-to-A4 image using the 4 paper corners
+ * (OpenCV perspective homography). Returns the rectified RGBA image; the caller
+ * makes it the working image so all tracing runs on an undistorted, to-scale sheet.
+ */
+export async function rectifyToA4(
+  imageData: ImageData,
+  paperCorners: PaperCorners,
+): Promise<{ rgba: ArrayBuffer; width: number; height: number }> {
+  return request<{ rgba: ArrayBuffer; width: number; height: number }>('rectifyToA4', { imageData, paperCorners });
+}
+
 export interface ToolProposal {
   positivePoints: Point2D[];
   negativePoints: Point2D[];

@@ -77,9 +77,13 @@ export interface AppState {
   imageFile: File | null;
   imageUrl: string | null;
   imageSize: { width: number; height: number } | null;
+  isRectified: boolean; // true once the working image is a skew-corrected flat A4
   setImage: (file: File | null) => void;
   clearImage: () => void;
-  
+  // Replace the working image with a skew-corrected (rectified) flat-A4 image. The
+  // original File is kept (imageFile), so reverting = setImage(imageFile).
+  applyRectification: (rectifiedUrl: string, size: { width: number; height: number }, pixelsPerMm: number) => void;
+
   // Paper Detection
   paperCorners: PaperCorners | null;
   paperDetected: boolean;
@@ -191,6 +195,7 @@ const initialState = {
   imageFile: null,
   imageUrl: null,
   imageSize: null,
+  isRectified: false,
   paperCorners: null,
   paperDetected: false,
   paperConfidence: 0,
@@ -258,6 +263,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         imageFile: file,
         imageUrl: url,
         imageSize: { width: img.width, height: img.height },
+        isRectified: false,
         currentStep: 'paper',
         isProcessing: false,
         processingMessage: '',
@@ -279,7 +285,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     
     img.src = url;
   },
-  
+
+  applyRectification: (rectifiedUrl, size, pixelsPerMm) => set((state) => {
+    // Swap the working image for the rectified flat A4. Revoke the previous working
+    // URL (the raw upload's object URL); the original File stays in imageFile for
+    // revert. Paper now fills the frame, so corners are the image border and the
+    // scale is exact + uniform. Tools/outlines reset — they trace on the new image.
+    if (state.imageUrl) URL.revokeObjectURL(state.imageUrl);
+    return {
+      imageUrl: rectifiedUrl,
+      imageSize: size,
+      isRectified: true,
+      pixelsPerMm,
+      paperDetected: true,
+      paperCorners: {
+        topLeft: { x: 0, y: 0 },
+        topRight: { x: size.width, y: 0 },
+        bottomRight: { x: size.width, y: size.height },
+        bottomLeft: { x: 0, y: size.height },
+      },
+      toolOutlines: [],
+      selectedOutlineId: null,
+      refineHistory: {} as Record<string, ToolOutline[]>,
+    };
+  }),
+
   clearImage: () => {
     const prevUrl = get().imageUrl;
     if (prevUrl) {

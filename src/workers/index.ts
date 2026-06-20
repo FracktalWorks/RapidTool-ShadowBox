@@ -4,6 +4,7 @@
 
 export {
   detectPaper,
+  rectifyToA4,
   traceTool,
   traceRegion,
   traceAllTools,
@@ -11,6 +12,7 @@ export {
   grabCutRefine,
   grabCutClear,
   contourFromMask,
+  getImageData,
   type PaperDetectionResult,
   type ToolTracingResult,
   type Stroke,

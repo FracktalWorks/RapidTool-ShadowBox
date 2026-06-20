@@ -460,6 +460,39 @@ function detectPaper(imageData: ImageData) {
   };
 }
 
+// Skew-correct the photo to a flat, true-to-A4 image via a perspective homography
+// from the 4 detected/dragged paper corners. Returns a rectified RGBA image whose
+// border IS the A4 sheet — so every downstream step (SOD/SAM/GrabCut/classical/
+// shadow) runs unchanged on an undistorted, to-scale sheet. Areas outside the quad
+// fill white (paper-coloured) so they read as background.
+function rectifyToA4(imageData: ImageData, corners: PaperCorners): { rgba: ArrayBuffer; width: number; height: number } {
+  const A4_SHORT = 210, A4_LONG = 297;
+  const { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl } = corners;
+
+  // Paper pixel size (average opposite edges) → choose a target that preserves A4
+  // aspect, oriented from the detected quad, long side ≈ detected px (capped 2000).
+  const paperW = (dist(tl, tr) + dist(bl, br)) / 2;
+  const paperH = (dist(tl, bl) + dist(tr, br)) / 2;
+  const landscape = paperW > paperH;
+  const longPx = clamp(Math.round(Math.max(paperW, paperH)), 200, 2000);
+  const shortPx = Math.round(longPx * (A4_SHORT / A4_LONG));
+  const dstW = landscape ? longPx : shortPx;
+  const dstH = landscape ? shortPx : longPx;
+
+  const src = cv.matFromImageData(imageData); // CV_8UC4 (RGBA)
+  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
+  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, dstW, 0, dstW, dstH, 0, dstH]);
+  const M = cv.getPerspectiveTransform(srcTri, dstTri);
+  const dst = new cv.Mat();
+  cv.warpPerspective(src, dst, M, new cv.Size(dstW, dstH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255));
+
+  const rgba = new Uint8ClampedArray(dst.data).buffer; // copy RGBA bytes out of the Mat
+  const width = dst.cols, height = dst.rows;
+  deleteMats(src, srcTri, dstTri, M, dst);
+  console.log(`rectifyToA4: ${imageData.width}x${imageData.height} -> ${width}x${height} (${landscape ? 'landscape' : 'portrait'})`);
+  return { rgba, width, height };
+}
+
 // Detect white paper using HSV color segmentation (widened thresholds)
 function detectWhitePaper(src: any, totalArea: number): { points: Point2D[]; confidence: number } | null {
   const rgb = new cv.Mat();
@@ -1762,6 +1795,9 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
       case 'detectPaper':
         result = detectPaper(payload.imageData);
         break;
+      case 'rectifyToA4':
+        result = rectifyToA4(payload.imageData, payload.paperCorners);
+        break;
       case 'traceTool':
         result = traceTool(payload.imageData, payload.x, payload.y, payload.paperCorners);
         break;
@@ -1798,7 +1834,9 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
         throw new Error(`Unknown message type: ${type}`);
     }
 
-    self.postMessage({ id, type: 'success', payload: result } as WorkerResponse);
+    // Transfer large rectified-image buffers instead of cloning them.
+    const transfer = result && result.rgba instanceof ArrayBuffer ? [result.rgba] : [];
+    self.postMessage({ id, type: 'success', payload: result } as WorkerResponse, transfer);
   } catch (err) {
     self.postMessage({
       id,

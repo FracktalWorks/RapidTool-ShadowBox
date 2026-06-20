@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 
 import { useAppStore } from "../stores";
-import { detectPaper } from "../workers";
+import { detectPaper, rectifyToA4, getImageData } from "../workers";
 import { downloadSVG } from "../lib/exportSVG";
 import { offsetPolygon } from "../lib/geometry";
 
@@ -50,8 +50,11 @@ const PaperStepPanel: React.FC = () => {
     setImage,
     clearImage,
     paperDetected,
+    paperCorners,
     pixelsPerMm,
     imageUrl,
+    isRectified,
+    applyRectification,
     setCurrentStep,
     setPaperDetected,
     setPaperCorners,
@@ -59,7 +62,38 @@ const PaperStepPanel: React.FC = () => {
   } = useAppStore();
 
   const [isDetecting, setIsDetecting] = useState(false);
+  const [isRectifying, setIsRectifying] = useState(false);
   const [detectionMessage, setDetectionMessage] = useState<string | null>(null);
+
+  // Skew-correct the photo to a flat A4 (using the detected/dragged corners), make
+  // it the working image, then advance to tracing. For a top-down photo the warp is
+  // ~identity (no-op). On any failure, fall through to tracing on the original image.
+  const handleContinueToTrace = useCallback(async () => {
+    if (!imageUrl || !paperCorners) { setCurrentStep("tools"); return; }
+    setIsRectifying(true);
+    try {
+      const imageData = await getImageData(imageUrl);
+      const { rgba, width, height } = await rectifyToA4(imageData, paperCorners);
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
+      const url: string = await new Promise((res, rej) =>
+        canvas.toBlob((b) => (b ? res(URL.createObjectURL(b)) : rej(new Error("toBlob failed"))), "image/png")
+      );
+      const ppm = Math.max(width, height) / 297; // A4 long side = 297 mm → exact, uniform
+      applyRectification(url, { width, height }, ppm);
+    } catch (e) {
+      console.warn("Skew-correction failed; tracing on the original image:", e);
+    } finally {
+      setIsRectifying(false);
+      setCurrentStep("tools");
+    }
+  }, [imageUrl, paperCorners, applyRectification, setCurrentStep]);
+
+  // Revert a rectified image back to the original photo to re-do paper detection.
+  const handleRevertToOriginal = useCallback(() => {
+    if (imageFile) setImage(imageFile);
+  }, [imageFile, setImage]);
 
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -335,33 +369,41 @@ const PaperStepPanel: React.FC = () => {
                 )}
 
                 <p className="text-[11px] text-[hsl(var(--muted-foreground))] font-medium">
-                  Drag corner handles in viewport to adjust if needed.
+                  {isRectified
+                    ? "Flattened to A4 — outlines will be to scale. Revert to re-detect on the original photo."
+                    : "Drag corner handles in the viewport to fit the sheet. Continue straightens any tilt to a flat A4."}
                 </p>
 
                 <div className="flex gap-2">
                   <button
-                    onClick={handleRetryDetection}
+                    onClick={isRectified ? handleRevertToOriginal : handleRetryDetection}
+                    disabled={isRectifying}
                     className="
                       flex-1 h-9 px-3 border border-[hsl(var(--border))]
                       rounded-xl text-[13px] font-medium hover:bg-[hsl(var(--muted))]
                       transition-all duration-200 flex items-center justify-center gap-1.5
+                      disabled:opacity-50
                     "
                   >
                     <RefreshCw className="w-3 h-3" />
-                    Re-detect
+                    {isRectified ? "Revert" : "Re-detect"}
                   </button>
                   <button
-                    onClick={() => setCurrentStep("tools")}
+                    onClick={handleContinueToTrace}
+                    disabled={isRectifying}
                     className="
                       flex-1 h-9 px-3
                       rounded-xl text-[13px] font-semibold
                       transition-all duration-200 flex items-center justify-center gap-1.5
-                      text-white
+                      text-white disabled:opacity-60
                     "
                     style={{ background: 'var(--gradient-primary)', boxShadow: 'var(--shadow-btn)' }}
                   >
-                    Continue
-                    <ChevronRight className="w-3 h-3" />
+                    {isRectifying ? (
+                      <><Loader2 className="w-3 h-3 animate-spin" /> Straightening…</>
+                    ) : (
+                      <>Continue <ChevronRight className="w-3 h-3" /></>
+                    )}
                   </button>
                 </div>
               </>
