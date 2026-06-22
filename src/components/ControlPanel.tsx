@@ -70,6 +70,18 @@ const PaperStepPanel: React.FC = () => {
   // ~identity (no-op). On any failure, fall through to tracing on the original image.
   const handleContinueToTrace = useCallback(async () => {
     if (!imageUrl || !paperCorners) { setCurrentStep("tools"); return; }
+
+    // Only warp when there's REAL perspective skew. A near-top-down photo's quad is
+    // already ~rectangular, so warping it would only resample (softening edges and
+    // making tool shadows relatively more salient to detection) for no geometric gain.
+    // Skew = how much opposite edges differ in length (0 = perfect rectangle).
+    const c = paperCorners;
+    const d = (a: typeof c.topLeft, b: typeof c.topLeft) => Math.hypot(a.x - b.x, a.y - b.y);
+    const top = d(c.topLeft, c.topRight), bot = d(c.bottomLeft, c.bottomRight);
+    const left = d(c.topLeft, c.bottomLeft), right = d(c.topRight, c.bottomRight);
+    const skew = Math.max(Math.abs(top - bot) / Math.max(top, bot, 1), Math.abs(left - right) / Math.max(left, right, 1));
+    if (skew < 0.04) { setCurrentStep("tools"); return; } // near-flat → keep the sharper original
+
     setIsRectifying(true);
     try {
       const imageData = await getImageData(imageUrl);
