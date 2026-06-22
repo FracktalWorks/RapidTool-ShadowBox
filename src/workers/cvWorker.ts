@@ -145,6 +145,71 @@ const quadArea = (q: Point2D[]): number => {
   return Math.abs(a) / 2;
 };
 
+// ── Edge-line corner refinement ──────────────────────────────────────────────
+// Line as ax + by + c = 0 (a,b unit normal).
+type Line = { a: number; b: number; c: number };
+const lineThrough = (p: Point2D, q: Point2D): Line => {
+  const dx = q.x - p.x, dy = q.y - p.y;
+  const a = -dy, b = dx, n = Math.hypot(a, b) || 1;
+  return { a: a / n, b: b / n, c: -((a / n) * p.x + (b / n) * p.y) };
+};
+// Total-least-squares line fit (PCA on the point covariance).
+const fitLineTLS = (pts: Point2D[]): Line => {
+  let mx = 0, my = 0;
+  for (const p of pts) { mx += p.x; my += p.y; }
+  mx /= pts.length; my /= pts.length;
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const p of pts) { const dx = p.x - mx, dy = p.y - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy); // major-axis direction
+  const a = -Math.sin(theta), b = Math.cos(theta);     // normal = perpendicular
+  return { a, b, c: -(a * mx + b * my) };
+};
+const intersectLines = (l1: Line, l2: Line): Point2D | null => {
+  const det = l1.a * l2.b - l2.a * l1.b;
+  if (Math.abs(det) < 1e-9) return null; // parallel
+  return { x: (l1.b * l2.c - l2.b * l1.c) / det, y: (l2.a * l1.c - l1.a * l2.c) / det };
+};
+// Distance from p to segment a→b + the (unclamped) parameter t along it.
+const ptSeg = (p: Point2D, a: Point2D, b: Point2D): { d: number; t: number } => {
+  const vx = b.x - a.x, vy = b.y - a.y, len2 = vx * vx + vy * vy || 1;
+  const t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2;
+  const tc = Math.max(0, Math.min(1, t));
+  return { d: Math.hypot(p.x - (a.x + tc * vx), p.y - (a.y + tc * vy)), t };
+};
+
+// Snap the 4 corners exactly onto the sheet edges: assign each contour point to the
+// nearest of the 4 edges (corner regions excluded), fit a line per edge, and intersect
+// adjacent lines. This recovers true sharp corners on the paper boundary even when the
+// mask corners are rounded/shrunk inward by morphology — the cause of the trace sitting
+// INSIDE the A4. Guarded: falls back to the input corner on any degeneracy/large drift.
+const refineByEdgeLines = (contour: any, ordered: Point2D[]): Point2D[] => {
+  try {
+    const n = contour.rows;
+    if (n < 16) return ordered;
+    const d = contour.data32S;
+    const segs: [Point2D, Point2D][] = [
+      [ordered[0], ordered[1]], [ordered[1], ordered[2]],
+      [ordered[2], ordered[3]], [ordered[3], ordered[0]],
+    ];
+    const segLen = segs.map(([a, b]) => Math.hypot(b.x - a.x, b.y - a.y));
+    const buckets: Point2D[][] = [[], [], [], []];
+    for (let i = 0; i < n; i++) {
+      const p = { x: d[i * 2], y: d[i * 2 + 1] };
+      let bi = 0, bd = Infinity, bt = 0;
+      for (let s = 0; s < 4; s++) { const r = ptSeg(p, segs[s][0], segs[s][1]); if (r.d < bd) { bd = r.d; bi = s; bt = r.t; } }
+      if (bt > 0.12 && bt < 0.88) buckets[bi].push(p); // drop rounded corner regions
+    }
+    const lines = buckets.map((pts, s) => (pts.length >= 6 ? fitLineTLS(pts) : lineThrough(segs[s][0], segs[s][1])));
+    const maxLen = Math.max(...segLen);
+    return ordered.map((c, k) => {
+      const p = intersectLines(lines[(k + 3) % 4], lines[k]);
+      return p && Math.hypot(p.x - c.x, p.y - c.y) < 0.1 * maxLen ? p : c;
+    });
+  } catch {
+    return ordered;
+  }
+};
+
 // Compute median of grayscale image for auto-tuned Canny
 function computeMedian(gray: any): number {
   const hist = new cv.Mat();
@@ -550,10 +615,12 @@ function detectWhitePaper(src: any, totalArea: number): { points: Point2D[]; con
   cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, closeKernel);
   cv.morphologyEx(mask, mask, cv.MORPH_OPEN, openKernel);
 
-  // EXTRA STEP: Zero out the extreme edges (1% margin) of the mask.
-  // This prevents the TR corner from 'sticking' to background noise at the image boundary.
-  const borderW = Math.round(mask.cols * 0.01);
-  const borderH = Math.round(mask.rows * 0.01);
+  // Zero only a hairline (2px) border so a mask that touches the image edge doesn't
+  // wrap the frame — but NOT a full 1%, which clipped the sheet inward (~11px on a
+  // 1156px photo) whenever the paper reached the image edge, pulling the trace inside
+  // the A4. The edge-line corner fit recovers the true boundary either way.
+  const borderW = 2;
+  const borderH = 2;
 
   // Clear the 4 border strips
   cv.rectangle(mask, new cv.Point(0, 0), new cv.Point(mask.cols, borderH), new cv.Scalar(0), -1); // Top
@@ -606,7 +673,8 @@ function detectPaperByEdges(gray: any, totalArea: number): { points: Point2D[]; 
 function findBestQuadrilateral(binary: any, totalArea: number): { points: Point2D[]; confidence: number } | null {
   const contours = new cv.MatVector();
   const hierarchy = new cv.Mat();
-  cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  // CHAIN_APPROX_NONE: keep every boundary pixel so edge-line fitting has dense samples.
+  cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
 
   let best: { points: Point2D[]; confidence: number } | null = null;
 
@@ -621,10 +689,12 @@ function findBestQuadrilateral(binary: any, totalArea: number): { points: Point2
     }
 
     // Robust corners via convex-hull extreme points (handles perspective trapezoids;
-    // no fragile epsilon, no rectangle-forcing minAreaRect, no TR-clamp band-aid).
+    // no fragile epsilon, no rectangle-forcing minAreaRect, no TR-clamp band-aid),
+    // then snap them exactly onto the sheet edges by fitting + intersecting edge lines
+    // (so the quad sits ON the A4 boundary, not inside it).
     const corners = extremeQuadCorners(contour);
     if (!corners) { contour.delete(); continue; }
-    const ordered = orderCorners(corners);
+    const ordered = refineByEdgeLines(contour, orderCorners(corners));
 
     const w = (dist(ordered[0], ordered[1]) + dist(ordered[3], ordered[2])) / 2;
     const h = (dist(ordered[0], ordered[3]) + dist(ordered[1], ordered[2])) / 2;
