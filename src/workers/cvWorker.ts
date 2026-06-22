@@ -512,6 +512,51 @@ function autoTunedCanny(blurred: any, sigma = 0.33): any {
 // Paper Detection (Enhanced)
 // ============================================================================
 
+// CamScanner-style edge refinement: snap each of the 4 edges to the strongest IMAGE
+// gradient (the real paper→table boundary), independent of the colour-mask precision.
+// For points along each edge, search perpendicular for the max intensity gradient, fit
+// a line to those true-edge points, and intersect adjacent lines → precise corners.
+// Guarded per-corner: a weak/ambiguous edge keeps the mask-derived corner.
+const refineCornersByGradient = (gray: any, corners: Point2D[]): Point2D[] => {
+  try {
+    const cols = gray.cols, rows = gray.rows, g = gray.data as Uint8Array;
+    const at = (x: number, y: number) => {
+      const xi = x < 0 ? 0 : x >= cols ? cols - 1 : x | 0;
+      const yi = y < 0 ? 0 : y >= rows ? rows - 1 : y | 0;
+      return g[yi * cols + xi];
+    };
+    const search = Math.max(6, Math.round(Math.hypot(cols, rows) * 0.02)); // ±2% perpendicular
+    const SAMPLES = 48;
+    const lines: Line[] = [];
+    for (let k = 0; k < 4; k++) {
+      const a = corners[k], b = corners[(k + 1) % 4];
+      const ex = b.x - a.x, ey = b.y - a.y, elen = Math.hypot(ex, ey) || 1;
+      const nx = -ey / elen, ny = ex / elen; // unit edge normal
+      const pts: Point2D[] = [];
+      for (let s = 1; s < SAMPLES; s++) {
+        const f = s / SAMPLES;
+        if (f < 0.12 || f > 0.88) continue; // skip corner regions
+        const px = a.x + ex * f, py = a.y + ey * f;
+        let bestT = 0, bestGrad = -1;
+        for (let t = -search; t <= search; t++) {
+          const x = px + nx * t, y = py + ny * t;
+          const grad = Math.abs(at(x + nx, y + ny) - at(x - nx, y - ny)); // gradient across edge
+          if (grad > bestGrad) { bestGrad = grad; bestT = t; }
+        }
+        if (bestGrad > 18) pts.push({ x: px + nx * bestT, y: py + ny * bestT }); // strong edges only
+      }
+      lines.push(pts.length >= 8 ? fitLineTLS(pts) : lineThrough(a, b));
+    }
+    const maxLen = Math.max(...corners.map((c, k) => dist(c, corners[(k + 1) % 4])));
+    return corners.map((c, k) => {
+      const p = intersectLines(lines[(k + 3) % 4], lines[k]);
+      return p && Math.hypot(p.x - c.x, p.y - c.y) < 0.06 * maxLen ? p : c;
+    });
+  } catch {
+    return corners;
+  }
+};
+
 function detectPaper(imageData: ImageData) {
   console.log('Detecting paper...', imageData.width, 'x', imageData.height);
   const src = cv.matFromImageData(imageData);
@@ -536,7 +581,9 @@ function detectPaper(imageData: ImageData) {
     return { detected: false, confidence: 0, corners: null, pixelsPerMm: null, message: 'No paper detected' };
   }
 
-  const [tl, tr, br, bl] = orderCorners(best.points);
+  // Snap corners to the true paper edges via image-gradient line fitting (uses gray;
+  // must run before it's freed). Falls back to the mask corners on weak edges.
+  const [tl, tr, br, bl] = refineCornersByGradient(gray, orderCorners(best.points));
   deleteMats(src, gray);
   const corners: PaperCorners = { topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl };
 
