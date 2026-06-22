@@ -164,6 +164,25 @@ const fitLineTLS = (pts: Point2D[]): Line => {
   const a = -Math.sin(theta), b = Math.cos(theta);     // normal = perpendicular
   return { a, b, c: -(a * mx + b * my) };
 };
+// Robust line fit (RANSAC): pick the line supported by the most points within 2.5px,
+// then refit TLS on just those inliers. Stops a few stray points (a tool touching the
+// paper edge, background texture, a shadow) from dragging the whole edge off.
+const fitLineRobust = (pts: Point2D[]): Line => {
+  if (pts.length < 4) return fitLineTLS(pts);
+  const THRESH = 2.5;
+  let best = fitLineTLS(pts), bestIn = -1;
+  for (let iter = 0; iter < 50; iter++) {
+    const a = pts[(Math.random() * pts.length) | 0];
+    const b = pts[(Math.random() * pts.length) | 0];
+    if (a === b) continue;
+    const L = lineThrough(a, b);
+    let inl = 0;
+    for (const p of pts) if (Math.abs(L.a * p.x + L.b * p.y + L.c) < THRESH) inl++;
+    if (inl > bestIn) { bestIn = inl; best = L; }
+  }
+  const inliers = pts.filter((p) => Math.abs(best.a * p.x + best.b * p.y + best.c) < THRESH);
+  return inliers.length >= 4 ? fitLineTLS(inliers) : best;
+};
 const intersectLines = (l1: Line, l2: Line): Point2D | null => {
   const det = l1.a * l2.b - l2.a * l1.b;
   if (Math.abs(det) < 1e-9) return null; // parallel
@@ -199,7 +218,7 @@ const refineByEdgeLines = (contour: any, ordered: Point2D[]): Point2D[] => {
       for (let s = 0; s < 4; s++) { const r = ptSeg(p, segs[s][0], segs[s][1]); if (r.d < bd) { bd = r.d; bi = s; bt = r.t; } }
       if (bt > 0.12 && bt < 0.88) buckets[bi].push(p); // drop rounded corner regions
     }
-    const lines = buckets.map((pts, s) => (pts.length >= 6 ? fitLineTLS(pts) : lineThrough(segs[s][0], segs[s][1])));
+    const lines = buckets.map((pts, s) => (pts.length >= 6 ? fitLineRobust(pts) : lineThrough(segs[s][0], segs[s][1])));
     const maxLen = Math.max(...segLen);
     return ordered.map((c, k) => {
       const p = intersectLines(lines[(k + 3) % 4], lines[k]);
@@ -545,7 +564,7 @@ const refineCornersByGradient = (gray: any, corners: Point2D[]): Point2D[] => {
         }
         if (bestGrad > 18) pts.push({ x: px + nx * bestT, y: py + ny * bestT }); // strong edges only
       }
-      lines.push(pts.length >= 8 ? fitLineTLS(pts) : lineThrough(a, b));
+      lines.push(pts.length >= 8 ? fitLineRobust(pts) : lineThrough(a, b));
     }
     const maxLen = Math.max(...corners.map((c, k) => dist(c, corners[(k + 1) % 4])));
     return corners.map((c, k) => {
