@@ -996,7 +996,7 @@ export const ExportWorkspace: React.FC = () => {
       <div className="flex-1">
         {exportFormat === 'stl' ? (
           <Canvas
-            shadows
+            dpr={Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2)}
             camera={{
               fov: 45,
               near: 0.1,
@@ -1008,6 +1008,15 @@ export const ExportWorkspace: React.FC = () => {
               preserveDrawingBuffer: true,
               toneMapping: THREE.ACESFilmicToneMapping,
               toneMappingExposure: 1,
+              powerPreference: 'high-performance',
+              failIfMajorPerformanceCaveat: false,
+            }}
+            onCreated={({ gl }) => {
+              // WebGPU (SAM) + the design + export WebGL canvases contend for the GPU;
+              // preventDefault on 'lost' lets the browser RESTORE the context (R3F
+              // rebuilds) instead of leaving the preview blank.
+              const canvas = gl.domElement;
+              canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); }, false);
             }}
           >
             <Scene3D
