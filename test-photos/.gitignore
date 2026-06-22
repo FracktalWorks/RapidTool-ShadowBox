@@ -1,0 +1,4 @@
+# Local test photos — never commit (private images).
+*
+!.gitignore
+!README.md
