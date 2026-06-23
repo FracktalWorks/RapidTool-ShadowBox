@@ -10,6 +10,7 @@
 const fs = require('fs');
 const { join, basename, extname } = require('path');
 const sharp = require('sharp');
+const { PNG } = require('pngjs');
 
 const ROOT = join(__dirname, '..');
 const IN = join(ROOT, 'test-photos');
@@ -20,16 +21,6 @@ const KNOBS = {
   whiteValMin: 155, whiteSatMax: 70,
   gradThresh: 18, gradSearchPct: 0.02, ransacTol: 2.5,
 };
-
-// Load OpenCV.js at TOP LEVEL (it only inits reliably from the main module's top-level
-// require — not from inside an async/microtask). Copy to a sibling .cjs first so Node
-// loads it as CommonJS despite this package being type:module.
-const _cvCjs = join(__dirname, '_cv_runtime.cjs');
-fs.copyFileSync(join(ROOT, 'public', 'opencv.js'), _cvCjs);
-let _resolveCv;
-const cvReady = new Promise((res) => { _resolveCv = res; });
-globalThis.Module = { onRuntimeInitialized() { try { fs.rmSync(_cvCjs); } catch {} _resolveCv(globalThis.cv || globalThis.Module); } };
-require(_cvCjs);
 
 // ── Pure geometry helpers (ported verbatim from cvWorker.ts) ──────────────────
 const dist = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
@@ -96,28 +87,43 @@ function detectCorners(cv, src, gray, totalArea) {
   return best ? refineByGradient(gray, best) : null;
 }
 
+// OpenCV.js BLOCKS the event loop after its init callback fires, so any `await` after
+// init never resumes. Work around it: decode every input image FIRST (async sharp),
+// then load OpenCV and do all CV work + output SYNCHRONOUSLY inside onRuntimeInitialized
+// (write PNGs with pngjs's sync encoder), and process.exit from there.
 (async () => {
-  const cv = await cvReady;
   if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
   const files = fs.readdirSync(IN).filter((f) => /\.(jpe?g|png)$/i.test(f));
-  console.log(`KNOBS ${JSON.stringify(KNOBS)}\n`);
+  const imgs = [];
   for (const f of files) {
-    try {
-      const { data, info } = await sharp(join(IN, f)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-      const { width, height } = info;
-      const src = new cv.Mat(height, width, cv.CV_8UC4); src.data.set(new Uint8Array(data));
-      const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      const corners = detectCorners(cv, src, gray, width * height);
-      if (!corners) { console.log(`${f.padEnd(16)} NO PAPER`); src.delete(); gray.delete(); continue; }
-      const c4 = corners;
-      for (let i = 0; i < 4; i++) cv.line(src, new cv.Point(c4[i].x, c4[i].y), new cv.Point(c4[(i + 1) % 4].x, c4[(i + 1) % 4].y), new cv.Scalar(0, 200, 255, 255), Math.max(2, Math.round(width / 400)));
-      for (const p of c4) cv.circle(src, new cv.Point(p.x, p.y), Math.max(4, Math.round(width / 120)), new cv.Scalar(255, 0, 0, 255), -1);
-      const w2 = (dist(c4[0], c4[1]) + dist(c4[3], c4[2])) / 2, h2 = (dist(c4[0], c4[3]) + dist(c4[1], c4[2])) / 2;
-      console.log(`${f.padEnd(16)} ${width}x${height} ppm=${(Math.max(w2, h2) / 297).toFixed(2)} TL(${c4[0].x | 0},${c4[0].y | 0}) TR(${c4[1].x | 0},${c4[1].y | 0}) BR(${c4[2].x | 0},${c4[2].y | 0}) BL(${c4[3].x | 0},${c4[3].y | 0})`);
-      await sharp(Buffer.from(src.data), { raw: { width, height, channels: 4 } }).jpeg({ quality: 80 }).toFile(join(OUT, `${basename(f, extname(f))}_det.jpg`));
-      src.delete(); gray.delete();
-    } catch (e) { console.log(`${f.padEnd(16)} ERROR: ${(e && e.message ? e.message : String(e)).slice(0, 140)}`); }
+    const { data, info } = await sharp(join(IN, f)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    imgs.push({ f, data: new Uint8Array(data), width: info.width, height: info.height });
   }
-  console.log(`\nDone -> ${OUT}`);
-  process.exit(0);
+
+  const cjs = join(__dirname, '_cv_runtime.cjs');
+  fs.copyFileSync(join(ROOT, 'public', 'opencv.js'), cjs);
+  globalThis.Module = { onRuntimeInitialized() {
+    const cv = globalThis.cv || globalThis.Module;
+    try { fs.rmSync(cjs); } catch {}
+    console.log(`KNOBS ${JSON.stringify(KNOBS)}\n`);
+    for (const im of imgs) {
+      try {
+        const { f, data, width, height } = im;
+        const src = new cv.Mat(height, width, cv.CV_8UC4); src.data.set(data);
+        const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+        const c4 = detectCorners(cv, src, gray, width * height);
+        if (!c4) { console.log(`${f.padEnd(16)} NO PAPER`); src.delete(); gray.delete(); continue; }
+        for (let i = 0; i < 4; i++) cv.line(src, new cv.Point(c4[i].x, c4[i].y), new cv.Point(c4[(i + 1) % 4].x, c4[(i + 1) % 4].y), new cv.Scalar(0, 200, 255, 255), Math.max(2, Math.round(width / 400)));
+        for (const p of c4) cv.circle(src, new cv.Point(p.x, p.y), Math.max(4, Math.round(width / 120)), new cv.Scalar(255, 0, 0, 255), -1);
+        const w2 = (dist(c4[0], c4[1]) + dist(c4[3], c4[2])) / 2, h2 = (dist(c4[0], c4[3]) + dist(c4[1], c4[2])) / 2;
+        console.log(`${f.padEnd(16)} ${width}x${height} ppm=${(Math.max(w2, h2) / 297).toFixed(2)} TL(${c4[0].x|0},${c4[0].y|0}) TR(${c4[1].x|0},${c4[1].y|0}) BR(${c4[2].x|0},${c4[2].y|0}) BL(${c4[3].x|0},${c4[3].y|0})`);
+        const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
+        fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_det.png`), PNG.sync.write(png));
+        src.delete(); gray.delete();
+      } catch (e) { console.log(`${im.f.padEnd(16)} ERROR: ${(e && e.message ? e.message : String(e)).slice(0, 140)}`); }
+    }
+    console.log(`\nDone -> ${OUT}`);
+    process.exit(0);
+  } };
+  require(cjs);
 })();
