@@ -544,7 +544,10 @@ const refineCornersByGradient = (gray: any, corners: Point2D[]): Point2D[] => {
       const yi = y < 0 ? 0 : y >= rows ? rows - 1 : y | 0;
       return g[yi * cols + xi];
     };
-    const search = Math.max(6, Math.round(Math.hypot(cols, rows) * 0.02)); // ±2% perpendicular
+    // ±5% perpendicular search: harness-validated — lets the edge snap to the true
+    // paper boundary when the colour mask over-extends into a light background (e.g.
+    // paper on a wood plank), with zero change on clean high-contrast shots.
+    const search = Math.max(6, Math.round(Math.hypot(cols, rows) * 0.05));
     const SAMPLES = 48;
     const lines: Line[] = [];
     for (let k = 0; k < 4; k++) {

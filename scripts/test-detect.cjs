@@ -19,7 +19,8 @@ const OUT = join(IN, 'output');
 const KNOBS = {
   blur: 15, closeK: 25, openK: 31,
   whiteValMin: 155, whiteSatMax: 70,
-  gradThresh: 18, gradSearchPct: 0.02, ransacTol: 2.5,
+  gradThresh: 18, gradSearchPct: 0.05, ransacTol: 2.5,
+  dumpMask: false,
 };
 
 // ── Pure geometry helpers (ported verbatim from cvWorker.ts) ──────────────────
@@ -83,8 +84,9 @@ function detectCorners(cv, src, gray, totalArea) {
     if (area >= totalArea * 0.05 && area <= totalArea * 0.995 && area > bestArea) { const cm = extremeQuadCorners(cv, c); if (cm) { bestArea = area; best = refineByEdgeLines(c, orderCorners(cm)); } }
     c.delete();
   }
+  const maskOut = KNOBS.dumpMask ? mask.clone() : null;
   [rgb, hsv, blurred, mask, lo, hi, ck, ok, contours, hier].forEach((m) => m.delete());
-  return best ? refineByGradient(gray, best) : null;
+  return { edge: best, grad: best ? refineByGradient(gray, best) : null, mask: maskOut };
 }
 
 // OpenCV.js BLOCKS the event loop after its init callback fires, so any `await` after
@@ -111,12 +113,20 @@ function detectCorners(cv, src, gray, totalArea) {
         const { f, data, width, height } = im;
         const src = new cv.Mat(height, width, cv.CV_8UC4); src.data.set(data);
         const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-        const c4 = detectCorners(cv, src, gray, width * height);
-        if (!c4) { console.log(`${f.padEnd(16)} NO PAPER`); src.delete(); gray.delete(); continue; }
-        for (let i = 0; i < 4; i++) cv.line(src, new cv.Point(c4[i].x, c4[i].y), new cv.Point(c4[(i + 1) % 4].x, c4[(i + 1) % 4].y), new cv.Scalar(0, 200, 255, 255), Math.max(2, Math.round(width / 400)));
-        for (const p of c4) cv.circle(src, new cv.Point(p.x, p.y), Math.max(4, Math.round(width / 120)), new cv.Scalar(255, 0, 0, 255), -1);
+        const res = detectCorners(cv, src, gray, width * height);
+        if (res.mask) { // dump the binary white-paper mask for diagnosis
+          const mp = new PNG({ width, height }); const mc = new cv.Mat(); cv.cvtColor(res.mask, mc, cv.COLOR_GRAY2RGBA); mp.data = Buffer.from(mc.data);
+          fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_mask.png`), PNG.sync.write(mp)); mc.delete(); res.mask.delete();
+        }
+        if (!res.edge) { console.log(`${f.padEnd(16)} NO PAPER`); src.delete(); gray.delete(); continue; }
+        const lw = Math.max(2, Math.round(width / 400)), cr = Math.max(4, Math.round(width / 120));
+        const drawQuad = (q, col) => { for (let i = 0; i < 4; i++) cv.line(src, new cv.Point(q[i].x, q[i].y), new cv.Point(q[(i + 1) % 4].x, q[(i + 1) % 4].y), col, lw); for (const p of q) cv.circle(src, new cv.Point(p.x, p.y), cr, col, -1); };
+        drawQuad(res.edge, new cv.Scalar(0, 220, 0, 255));   // GREEN = mask/edge-line stage
+        drawQuad(res.grad, new cv.Scalar(0, 200, 255, 255)); // CYAN  = gradient-refined (final)
+        const c4 = res.grad, e = res.edge;
         const w2 = (dist(c4[0], c4[1]) + dist(c4[3], c4[2])) / 2, h2 = (dist(c4[0], c4[3]) + dist(c4[1], c4[2])) / 2;
-        console.log(`${f.padEnd(16)} ${width}x${height} ppm=${(Math.max(w2, h2) / 297).toFixed(2)} TL(${c4[0].x|0},${c4[0].y|0}) TR(${c4[1].x|0},${c4[1].y|0}) BR(${c4[2].x|0},${c4[2].y|0}) BL(${c4[3].x|0},${c4[3].y|0})`);
+        const fmt = (q) => `TL(${q[0].x|0},${q[0].y|0}) TR(${q[1].x|0},${q[1].y|0}) BR(${q[2].x|0},${q[2].y|0}) BL(${q[3].x|0},${q[3].y|0})`;
+        console.log(`${f.padEnd(16)} ${width}x${height} ppm=${(Math.max(w2, h2) / 297).toFixed(2)}\n   edge ${fmt(e)}\n   grad ${fmt(c4)}`);
         const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
         fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_det.png`), PNG.sync.write(png));
         src.delete(); gray.delete();
