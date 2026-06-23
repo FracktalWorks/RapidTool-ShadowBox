@@ -209,7 +209,7 @@ export const DraggableCorners: React.FC<DraggableCornersProps> = ({
             />
 
             {/* Label */}
-            <text
+            <text        
               x={corner.x + (key.includes("Left") ? -labelOffset : labelOffset)}
               y={corner.y + (key.includes("top") ? -labelOffset : labelOffset)}
               fontSize={Math.max(10 / zoom, 8)}
@@ -227,3 +227,4 @@ export const DraggableCorners: React.FC<DraggableCornersProps> = ({
     </svg>
   );
 };
+  

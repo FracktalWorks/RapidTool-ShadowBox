@@ -1111,13 +1111,53 @@ function refineMaskToEdges(mask: any, imageData: ImageData): any {
 // SOD path: a prebuilt foreground mask from the trained model → per-tool results
 // through the exact same gates as the classical path. When the source image is
 // provided, GrabCut-refine the mask boundary to the real tool edges first.
+// Noise / blur ignorance: a cast shadow is a SMOOTH, blurry darkening with no sharp
+// edges of its own, while a tool has crisp edges. Keep only mask pixels that sit near
+// REAL image structure (strong gradient), then hole-fill — the tool's interior is
+// enclosed by its kept edges and refills, but the open shadow halo is not enclosed and
+// stays removed. Drops the shadow blobs SOD swallows without eating the tool body.
+// Guarded: if too much is lost (weak-edged tool, e.g. white-on-white), keep the input.
+function suppressShadowNoise(mask: any, imageData: ImageData): any {
+  let full: any = null, gray: any = null, gx: any = null, gy: any = null, mag: any = null;
+  let sharp: any = null, supported: any = null, ker: any = null, keep: any = null;
+  let ff: any = null, ffMask: any = null, inv: any = null, filled: any = null;
+  try {
+    full = cv.matFromImageData(imageData);
+    gray = new cv.Mat(); cv.cvtColor(full, gray, cv.COLOR_RGBA2GRAY);
+    gx = new cv.Mat(); gy = new cv.Mat();
+    cv.Sobel(gray, gx, cv.CV_16S, 1, 0, 3); cv.Sobel(gray, gy, cv.CV_16S, 0, 1, 3);
+    cv.convertScaleAbs(gx, gx); cv.convertScaleAbs(gy, gy);
+    mag = new cv.Mat(); cv.addWeighted(gx, 0.5, gy, 0.5, 0, mag);
+    sharp = new cv.Mat(); cv.threshold(mag, sharp, 22, 255, cv.THRESH_BINARY); // tool edges (shadows are smooth → below)
+    const R = Math.max(5, Math.round(0.02 * Math.min(gray.rows, gray.cols)));
+    ker = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(R, R));
+    supported = new cv.Mat(); cv.dilate(sharp, supported, ker); // region near real structure
+    keep = new cv.Mat(); cv.bitwise_and(mask, supported, keep);
+    // Hole-fill: flood the background from a corner, invert → enclosed holes (tool
+    // interior) become foreground; the open shadow region stays background.
+    ff = keep.clone();
+    ffMask = new cv.Mat(keep.rows + 2, keep.cols + 2, cv.CV_8UC1, new cv.Scalar(0));
+    cv.floodFill(ff, ffMask, new cv.Point(0, 0), new cv.Scalar(255));
+    inv = new cv.Mat(); cv.bitwise_not(ff, inv);
+    filled = new cv.Mat(); cv.bitwise_or(keep, inv, filled);
+    if (cv.countNonZero(filled) < 0.3 * Math.max(1, cv.countNonZero(mask))) return mask.clone();
+    return filled.clone();
+  } catch (e) {
+    console.warn('shadow/noise suppress skipped:', e instanceof Error ? e.message : e);
+    return mask.clone();
+  } finally {
+    deleteMats(full, gray, gx, gy, mag, sharp, supported, ker, keep, ff, ffMask, inv, filled);
+  }
+}
+
 function traceMask(maskData: Uint8Array, width: number, height: number, imageData?: ImageData): TraceResult[] {
   const raw = new cv.Mat(height, width, cv.CV_8UC1);
   raw.data.set(maskData);
-  const mask = imageData ? refineMaskToEdges(raw, imageData) : raw.clone();
+  let mask = imageData ? refineMaskToEdges(raw, imageData) : raw.clone();
+  if (imageData) { const cleaned = suppressShadowNoise(mask, imageData); mask.delete(); mask = cleaned; }
   const results = tracePreparedMask(mask, height, width);
   deleteMats(raw, mask);
-  console.log(`traceMask: found ${results.length} tools${imageData ? ' (edge-refined)' : ''}`);
+  console.log(`traceMask: found ${results.length} tools${imageData ? ' (edge-refined, shadow-suppressed)' : ''}`);
   return results;
 }
 
