@@ -136,11 +136,24 @@ export async function samSegmentPoint(
 
   // Pass the source image so the worker shadow-suppresses the SAM mask (drops the
   // cast-shadow spill SAM grabs on shadowed tools) before tracing the contour.
-  const contour = await contourFromMask(seg.mask, seg.width, seg.height, {
-    rgba: rgbaSnapshot.buffer as ArrayBuffer,
-    width: imgW,
-    height: imgH,
-  });
+  // The shadow-suppress pass is an ENHANCEMENT, never a gate: if the image buffer
+  // is unusable for any reason, trace the mask without it so the click still
+  // merges (a missed shadow-trim beats a dropped click).
+  let contour: ToolTracingResult | null = null;
+  let traced = false;
+  if (rgbaSnapshot.byteLength > 0) {
+    try {
+      contour = await contourFromMask(seg.mask, seg.width, seg.height, {
+        rgba: rgbaSnapshot.buffer as ArrayBuffer,
+        width: imgW,
+        height: imgH,
+      });
+      traced = true;
+    } catch (e) {
+      console.warn('[SAM] shadow-suppress pass failed; tracing without it:', e);
+    }
+  }
+  if (!traced) contour = await contourFromMask(seg.mask, seg.width, seg.height);
   const result = scaleResult(contour, seg.scale);
   if (!result) return null;
 
