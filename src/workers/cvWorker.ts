@@ -958,12 +958,14 @@ function extractContourPoints(
   offsetX: number,
   offsetY: number,
   area: number,
-  confidence?: number
+  confidence?: number,
+  epsScale: number = 1
 ): TraceResult {
   const peri = cv.arcLength(contour, true);
 
-  // Slightly looser epsilon to smooth out pixelation noise and straighten edges (floor of 1.0px)
-  const epsilon = Math.max(1.0, 0.0012 * peri);
+  // approxPolyDP tolerance. Lower epScale = a more faithful curve (more points
+  // hugging real edges); the SOD path passes <1 so traces follow curves tightly.
+  const epsilon = Math.max(0.6, 0.0012 * epsScale * peri);
 
   const approx = new cv.Mat();
   cv.approxPolyDP(contour, approx, epsilon, true);
@@ -987,8 +989,21 @@ function extractContourPoints(
 // Shared core: a solid binary mask (CV_8U, 0/255) → one gated TraceResult per
 // connected tool. Used by BOTH the classical path (buildToolMask) and the SOD
 // path (trained-model mask). Mutates `mask` (hole-fill). Caller frees `mask`.
-function tracePreparedMask(mask: any, rows: number, cols: number): TraceResult[] {
+function tracePreparedMask(mask: any, rows: number, cols: number, trusted = false): TraceResult[] {
   const totalArea = rows * cols;
+  const maskPx = cv.countNonZero(mask);
+  console.log(`tracePreparedMask: input mask=${maskPx}px (${(100 * maskPx / totalArea).toFixed(1)}% of frame)${trusted ? ' [SOD/trusted]' : ' [classical]'}`);
+
+  // GENTLE boundary clean-up before tracing. A morphological close removes
+  // single-pixel jaggies left by shadow-suppress WITHOUT rounding off the tool's
+  // real curves and corners — edge/curve precision is the priority. (An earlier
+  // aggressive 0.012 kernel was added to envelope screw threads, but it visibly
+  // rounded smooth tools; precision wins. Residual thread serration is better
+  // handled by the GrabCut edge-snap upstream than by blurring the whole outline.)
+  const smoothK = Math.max(3, Math.round(Math.min(rows, cols) * 0.004)) | 1;
+  const smoothKer = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(smoothK, smoothK));
+  cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, smoothKer);
+  smoothKer.delete();
 
   // Fill internal holes / shadow loops before tracing outer contours.
   const tempContours = new cv.MatVector();
@@ -1012,24 +1027,36 @@ function tracePreparedMask(mask: any, rows: number, cols: number): TraceResult[]
   const minArea = Math.max(10000, totalArea * 0.003);
   const results: TraceResult[] = [];
 
+  // Aspect ceiling: the classical path must reject paper folds / scratches /
+  // shadow wisps (aspect 19–45). But long thin TOOLS — screws, drill bits, Allen
+  // keys, scribes — live in that same range, so on the SOD/trusted path (where a
+  // trained model already confirmed object-ness) we allow much higher aspect.
+  const maxAspect = trusted ? 45 : 14;
+
   for (let i = 0; i < contours.size(); i++) {
     const contour = contours.get(i);
     const area = cv.contourArea(contour);
-    if (area < minArea || area > totalArea * 0.6) { contour.delete(); continue; }
+    if (area < minArea || area > totalArea * 0.6) {
+      console.log(`  reject contour ${i}: area=${Math.round(area)} (bounds ${Math.round(minArea)}–${Math.round(totalArea * 0.6)})`);
+      contour.delete(); continue;
+    }
 
     const solidity = calculateSolidity(contour);
-    if (solidity < 0.15) { contour.delete(); continue; }
+    if (solidity < 0.15) { console.log(`  reject contour ${i}: solidity=${solidity.toFixed(2)} < 0.15`); contour.delete(); continue; }
 
-    // Reject thin linear artifacts (paper folds / scratches / shadow wisps):
-    // aspect 19–45 measured, vs real tools ~2–3. Gate on min-area-rect aspect.
     const mar = cv.minAreaRect(contour);
     const minorDim = Math.min(mar.size.width, mar.size.height);
     const aspect = Math.max(mar.size.width, mar.size.height) / Math.max(1, minorDim);
     const minThick = Math.max(8, Math.round(Math.min(rows, cols) * 0.006));
-    if (aspect > 14 || minorDim < minThick) { contour.delete(); continue; }
+    if (aspect > maxAspect || minorDim < minThick) {
+      console.log(`  reject contour ${i}: aspect=${aspect.toFixed(1)} (max ${maxAspect}), minorDim=${minorDim.toFixed(0)} (min ${minThick})`);
+      contour.delete(); continue;
+    }
 
     const confidence = contourConfidence(contour);
-    results.push(extractContourPoints(contour, 0, 0, area, confidence));
+    // Trusted SOD masks are already edge-snapped by GrabCut — trace them tightly
+    // so real curves/edges are preserved; the classical path stays a touch looser.
+    results.push(extractContourPoints(contour, 0, 0, area, confidence, trusted ? 0.5 : 1));
     console.log(`Found tool: area=${Math.round(area)}, conf=${confidence.toFixed(2)}, minorDim=${minorDim.toFixed(0)}, aspect=${aspect.toFixed(1)}`);
     contour.delete();
   }
@@ -1126,6 +1153,14 @@ function suppressShadowNoise(mask: any, imageData: ImageData): any {
   let ff: any = null, ffMask: any = null, inv: any = null, filled: any = null;
   try {
     full = cv.matFromImageData(imageData);
+    // The image may be at a different resolution than the mask (SAM masks are at
+    // proc scale, the source image is original). Align them so the gradient map
+    // and the mask share pixel coordinates.
+    if (full.cols !== mask.cols || full.rows !== mask.rows) {
+      const resized = new cv.Mat();
+      cv.resize(full, resized, new cv.Size(mask.cols, mask.rows), 0, 0, cv.INTER_AREA);
+      full.delete(); full = resized;
+    }
     gray = new cv.Mat(); cv.cvtColor(full, gray, cv.COLOR_RGBA2GRAY);
     gx = new cv.Mat(); gy = new cv.Mat();
     cv.Sobel(gray, gx, cv.CV_16S, 1, 0, 3); cv.Sobel(gray, gy, cv.CV_16S, 0, 1, 3);
@@ -1156,9 +1191,14 @@ function suppressShadowNoise(mask: any, imageData: ImageData): any {
 function traceMask(maskData: Uint8Array, width: number, height: number, imageData?: ImageData): TraceResult[] {
   const raw = new cv.Mat(height, width, cv.CV_8UC1);
   raw.data.set(maskData);
+  console.log(`traceMask: raw SOD mask=${cv.countNonZero(raw)}px`);
   let mask = imageData ? refineMaskToEdges(raw, imageData) : raw.clone();
-  if (imageData) { const cleaned = suppressShadowNoise(mask, imageData); mask.delete(); mask = cleaned; }
-  const results = tracePreparedMask(mask, height, width);
+  if (imageData) {
+    console.log(`traceMask: after edge-refine=${cv.countNonZero(mask)}px`);
+    const cleaned = suppressShadowNoise(mask, imageData); mask.delete(); mask = cleaned;
+    console.log(`traceMask: after shadow-suppress=${cv.countNonZero(mask)}px`);
+  }
+  const results = tracePreparedMask(mask, height, width, true);
   deleteMats(raw, mask);
   console.log(`traceMask: found ${results.length} tools${imageData ? ' (edge-refined, shadow-suppressed)' : ''}`);
   return results;
@@ -1761,6 +1801,23 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
         if (!pointInPaperQuad(x, y, scaledCorners)) continue;
         if (pointCoveredByProposal(x, y, proposals, proposalPad, maxCoveredProposalArea)) continue;
 
+        // The grid exists ONLY to recover chrome-on-white tools that the
+        // classical+edge mask missed. If `combined` already fired here, the
+        // tool is already detected — probing it again just makes SAM return a
+        // fragmentary sub-part mask (one blob per grid cell), which is exactly
+        // the rainbow-fragmentation failure on large dark tools (a stepper
+        // motor becomes one huge proposal, then 15+ grid prompts shred it).
+        // Skip any grid cell whose local window is already covered by combined.
+        let covered = 0;
+        let winTotal = 0;
+        for (let yy = Math.max(0, y - win); yy <= Math.min(rows - 1, y + win); yy += 4) {
+          for (let xx = Math.max(0, x - win); xx <= Math.min(cols - 1, x + win); xx += 4) {
+            winTotal++;
+            if (combined.data[yy * cols + xx] > 0) covered++;
+          }
+        }
+        if (winTotal > 0 && covered / winTotal > 0.2) continue;
+
         let edgeCount = 0;
         let sum = 0;
         let sumSq = 0;
@@ -1840,9 +1897,21 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
 // Contour generation from mask
 // ============================================================================
 
-function contourFromMask(mask: Uint8Array, width: number, height: number): TraceResult | null {
-  const m = new cv.Mat(height, width, cv.CV_8UC1);
+function contourFromMask(mask: Uint8Array, width: number, height: number, imageData?: ImageData): TraceResult | null {
+  let m = new cv.Mat(height, width, cv.CV_8UC1);
   m.data.set(mask);
+
+  // Shadow/noise suppression for SAM/Click-Trace masks. SAM readily grabs a tool
+  // PLUS its cast shadow as one connected blob (the ragged spill the user sees on
+  // a shadowed tool). The classical+SOD paths already trim this; do the same here:
+  // keep only mask pixels near real image structure (sharp gradient) + hole-fill,
+  // so the smooth shadow halo drops while the crisp-edged tool body stays. Guarded
+  // internally — if it would gut a weak-edged tool it returns the input unchanged.
+  if (imageData) {
+    const cleaned = suppressShadowNoise(m, imageData);
+    m.delete();
+    m = cleaned;
+  }
 
   // Compute the bounding box of the mask content to adapt the close kernel
   // proportionally to THIS tool's size, not the whole image.
@@ -1984,9 +2053,14 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
         clearGrabCutSession();
         result = { cleared: true };
         break;
-      case 'contourFromMask':
-        result = contourFromMask(new Uint8Array(payload.mask), payload.width, payload.height);
+      case 'contourFromMask': {
+        let cfmImg: ImageData | undefined;
+        if (payload.rgba && payload.imgWidth && payload.imgHeight) {
+          cfmImg = new ImageData(new Uint8ClampedArray(payload.rgba), payload.imgWidth, payload.imgHeight);
+        }
+        result = contourFromMask(new Uint8Array(payload.mask), payload.width, payload.height, cfmImg);
         break;
+      }
       case 'proposeRegions':
         result = proposeRegions(payload.imageData, payload.paperCorners);
         break;

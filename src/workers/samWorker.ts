@@ -246,10 +246,62 @@ async function decodeAt(
     maskAreas[maskIdx] = area;
   }
 
-  // Find the index of the highest scoring mask
-  let highestScoreIdx = 0;
-  let maxScore = scores[0];
-  for (let i = 1; i < nMasks; i++) {
+  // CONTAINMENT FILTER: a mask is only a valid answer if it actually covers the
+  // user's POSITIVE clicks. SAM returns 3 nested masks (whole / part / speck);
+  // the speck usually has the top IoU score, so the area/score heuristic alone
+  // keeps picking a tiny blob — and as the user adds more clicks along a thin
+  // structure (a caliper jaw) the selected speck *shrinks* instead of growing,
+  // because each speck only needs to satisfy SAM, not contain every click.
+  // Restrict the candidate set to masks that contain all positive clicks; the
+  // tolerance is tight so a speck centred on one click can't claim clicks 40px
+  // away. Single-click refine is unaffected (all 3 nested masks contain it).
+  const posPts: [number, number][] = [];
+  for (let i = 0; i < points.length && i < labels.length; i++) {
+    if (labels[i] === 1) posPts.push(points[i]);
+  }
+  const tol = Math.max(3, Math.round(Math.min(H, W) * 0.004));
+  const maskCoversAllPositives = (maskIdx: number): boolean => {
+    if (posPts.length === 0) return true;
+    const off = maskIdx * H * W;
+    for (const [px, py] of posPts) {
+      const cx = Math.round(px), cy = Math.round(py);
+      let found = false;
+      for (let dy = -tol; dy <= tol && !found; dy++) {
+        const yy = cy + dy;
+        if (yy < 0 || yy >= H) continue;
+        for (let dx = -tol; dx <= tol; dx++) {
+          const xx = cx + dx;
+          if (xx < 0 || xx >= W) continue;
+          if (md[off + yy * W + xx]) { found = true; break; }
+        }
+      }
+      if (!found) return false;
+    }
+    return true;
+  };
+  // BACKGROUND-MASK PRE-FILTER: SAM's "whole" mask on a low-contrast tool (a
+  // grey caliper on light wood) is the sheet/background — 70%+ of the frame.
+  // It must never be a candidate, otherwise once clicks spread across the tool
+  // the only mask containing them all is that background blob, and containment
+  // would force it (then the area gate rejects everything → nothing gets added).
+  // Restrict to tool-sized masks first; only if every mask is background-sized
+  // do we keep them (segmentPoint's area gate is the final backstop).
+  const frameArea = H * W;
+  const toolSized: number[] = [];
+  for (let i = 0; i < nMasks; i++) if (maskAreas[i] <= frameArea * 0.30) toolSized.push(i);
+  const base = toolSized.length > 0 ? toolSized : Array.from({ length: nMasks }, (_, i) => i);
+
+  const candidates: number[] = [];
+  for (const i of base) if (maskCoversAllPositives(i)) candidates.push(i);
+  // If no tool-sized mask covers every click (clicks straddle a gap), fall back
+  // to all tool-sized masks and let scoring pick the best — the union of
+  // successive clicks still accumulates the region.
+  const pool = candidates.length > 0 ? candidates : base;
+
+  // Find the index of the highest scoring mask (within the valid pool)
+  let highestScoreIdx = pool[0];
+  let maxScore = scores[pool[0]];
+  for (const i of pool) {
     if (scores[i] > maxScore) {
       maxScore = scores[i];
       highestScoreIdx = i;
@@ -263,18 +315,22 @@ async function decodeAt(
   let best = highestScoreIdx;
   let bestArea = maskAreas[highestScoreIdx];
 
-  for (let i = 0; i < nMasks; i++) {
+  for (const i of pool) {
     if (maskAreas[i] > bestArea * 1.25 && scores[i] >= 0.55) {
       best = i;
       bestArea = maskAreas[i];
     }
   }
 
-  // Fallback to original selection logic if no significantly larger mask with score >= 0.55 is found
+  // Fallback to original selection logic if no significantly larger mask with score >= 0.55 is found.
+  // When multiple clicks already pin a large containing mask, accept it even at a
+  // lower score (a missed thin jaw reads as a low-IoU "whole" mask) — that's the
+  // whole point of the containment filter.
   if (best === highestScoreIdx) {
-    const thresholdScore = Math.max(0.65, maxScore * 0.85);
+    const multiClick = posPts.length >= 2 && candidates.length > 0;
+    const thresholdScore = multiClick ? 0 : Math.max(0.65, maxScore * 0.85);
     let maxArea = -1;
-    for (let i = 0; i < nMasks; i++) {
+    for (const i of pool) {
       if (scores[i] >= thresholdScore) {
         if (maskAreas[i] > maxArea) {
           maxArea = maskAreas[i];
@@ -318,12 +374,14 @@ async function segmentPoint(
 
   // VALIDITY GATE (area): clicking blank paper makes SAM segment the whole
   // sheet/background. A real tool is a bounded fraction of the frame. Reject
-  // paper-sized (>20%) and noise (<0.05%) masks so an empty-paper click yields
-  // nothing instead of a giant outline.
+  // paper-sized (>30%) and noise (<0.05%) masks so an empty-paper click yields
+  // nothing instead of a giant outline. (30% matches autoSegment's proven
+  // paper-vs-tool ceiling — the old 20% here wrongly dropped legit whole-tool
+  // masks recovered by multi-click refine, e.g. a caliper jaw.)
   let area = 0;
   for (let i = 0; i < r.data.length; i++) if (r.data[i]) area++;
   const procArea = r.width * r.height;
-  if (area < procArea * 0.0005 || area > procArea * 0.20) {
+  if (area < procArea * 0.0005 || area > procArea * 0.30) {
     console.log(`[SAM] click rejected — mask ${(100 * area / procArea).toFixed(1)}% of frame (not tool-sized)`);
     return null;
   }

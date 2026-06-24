@@ -128,7 +128,13 @@ export async function samSegmentPoint(
   everLoaded = true;
   if (!seg) return null; // worker rejected (paper-sized / noise) — no tool here
 
-  const contour = await contourFromMask(seg.mask, seg.width, seg.height);
+  // Pass the source image so the worker shadow-suppresses the SAM mask (drops the
+  // cast-shadow spill SAM grabs on shadowed tools) before tracing the contour.
+  const contour = await contourFromMask(seg.mask, seg.width, seg.height, {
+    rgba: imageData.data.buffer as ArrayBuffer,
+    width: imageData.width,
+    height: imageData.height,
+  });
   const result = scaleResult(contour, seg.scale);
   if (!result) return null;
 

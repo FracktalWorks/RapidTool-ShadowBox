@@ -208,8 +208,15 @@ export async function contourFromMask(
   mask: ArrayBuffer,
   width: number,
   height: number,
+  image?: { rgba: ArrayBuffer; width: number; height: number },
 ): Promise<ToolTracingResult | null> {
-  return request('contourFromMask', { mask, width, height });
+  // When the source image is supplied, the worker shadow-suppresses the mask
+  // (drops SAM's cast-shadow spill) before tracing. rgba is copied, not
+  // transferred — the caller (a single click) may reuse its ImageData buffer.
+  return request('contourFromMask', {
+    mask, width, height,
+    rgba: image?.rgba, imgWidth: image?.width, imgHeight: image?.height,
+  });
 }
 
 /**
