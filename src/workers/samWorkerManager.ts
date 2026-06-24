@@ -241,14 +241,18 @@ export async function samAutoSegmentDense(
 ): Promise<ToolTracingResult[]> {
   if (!paperCorners) return [];
   const imageData = await getImageData(imageUrl);
+  const imgW = imageData.width, imgH = imageData.height;
+  // Snapshot before the request transfers (detaches) the buffer — we need the
+  // pixels afterwards to shadow-suppress each mask.
+  const rgbaSnapshot = imageData.data.slice();
   const res = await request<{ masks: { mask: ArrayBuffer; width: number; height: number; score: number }[]; scale: number }>(
     'autoSegmentDense',
     {
       url: imageUrl,
       paperCorners,
       rgbaData: imageData.data,
-      width: imageData.width,
-      height: imageData.height,
+      width: imgW,
+      height: imgH,
     },
     onProgress,
   );
@@ -256,7 +260,19 @@ export async function samAutoSegmentDense(
 
   const out: ToolTracingResult[] = [];
   for (const m of res.masks) {
-    const contour = await contourFromMask(m.mask, m.width, m.height);
+    // Shadow-suppress the dense mask (drops the cast-shadow spur SAM grabs) — same
+    // enhancement-not-gate contract as the click path: fall back if it fails.
+    let contour: ToolTracingResult | null = null;
+    let traced = false;
+    if (rgbaSnapshot.byteLength > 0) {
+      try {
+        contour = await contourFromMask(m.mask, m.width, m.height, {
+          rgba: rgbaSnapshot.buffer as ArrayBuffer, width: imgW, height: imgH,
+        });
+        traced = true;
+      } catch { /* fall through */ }
+    }
+    if (!traced) contour = await contourFromMask(m.mask, m.width, m.height);
     const scaled = scaleResult(contour, res.scale);
     if (!scaled || scaled.points.length < 3) continue;
     let cx = 0, cy = 0;
