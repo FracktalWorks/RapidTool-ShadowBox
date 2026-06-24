@@ -372,6 +372,17 @@ async function segmentPoint(
   const r = await decodeAt(pts, labels, paperCorners);
   if (!r) return null;
 
+  // VALIDITY GATE (confidence): when a click lands on an ambiguous spot — a
+  // reflective screw thread, a chrome edge — SAM has no idea and returns garbage
+  // masks scored ~0.0003. Without a floor those get unioned in as a huge spurious
+  // blob. A genuine low-IoU "whole tool" mask (e.g. a thin caliper jaw recovered
+  // by multi-click) still scores ~0.1+, so a low floor separates noise from signal.
+  // Better to add nothing (user retries / uses Box Select) than corrupt the trace.
+  if (r.score < 0.05) {
+    console.log(`[SAM] click rejected — score ${r.score.toFixed(4)} too low (ambiguous prompt)`);
+    return null;
+  }
+
   // VALIDITY GATE (area): clicking blank paper makes SAM segment the whole
   // sheet/background. A real tool is a bounded fraction of the frame. Reject
   // paper-sized (>30%) and noise (<0.05%) masks so an empty-paper click yields
