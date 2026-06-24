@@ -15,23 +15,45 @@ import {
   type Point2D,
 } from '../lib/geometry';
 
-// Decimate a dense contour to a small set of editable anchors (corner-aware via
-// RDP). Editing hundreds of Chaikin points is impossible; ~16-40 anchors that
-// drive a smooth curve is how vector editors work.
+// Decimate a dense contour to editable anchors for a control-polygon + Chaikin
+// curve. Two requirements that pull against each other: keep sharp features
+// (corners) AND keep every drag LOCAL. A control point governs the arc between
+// its neighbors, so a long bare span makes dragging swing the whole segment.
+// Solution: RDP for corners, THEN an even-spacing pass that caps the arc any one
+// anchor governs (subdivide long spans). Handles end up evenly distributed and
+// every drag stays local, instead of clustering at corners with long bare edges.
 function buildEditAnchors(points: Point2D[]): Point2D[] {
-  if (points.length <= 20) return [...points];
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
+  if (points.length < 8) return [...points];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, perim = 0;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
     if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
     if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    const q = points[(i + 1) % points.length];
+    perim += Math.hypot(q.x - p.x, q.y - p.y);
   }
   const diag = Math.hypot(maxX - minX, maxY - minY);
-  // Adapt epsilon until the anchor count lands in a hand-editable range (~10-24).
-  // Too many handles (the old 40 cap) is unwieldy and was a user complaint.
-  let eps = diag * 0.02;
-  let anchors = simplifyPath(points, eps);
-  for (let i = 0; i < 6 && anchors.length > 24; i++) { eps *= 1.4; anchors = simplifyPath(points, eps); }
-  for (let i = 0; i < 6 && anchors.length < 10; i++) { eps *= 0.6; anchors = simplifyPath(points, eps); }
+
+  // 1) Corner-aware base via RDP (sparse on smooth runs, keeps sharp features).
+  let eps = diag * 0.015;
+  let base = simplifyPath(points, eps);
+  for (let i = 0; i < 6 && base.length > 40; i++) { eps *= 1.4; base = simplifyPath(points, eps); }
+
+  // 2) Even-spacing: cap the arc length one anchor governs so every drag is local.
+  const maxGap = Math.max(1, perim / 26);
+  const anchors: Point2D[] = [];
+  for (let i = 0; i < base.length; i++) {
+    const a = base[i], b = base[(i + 1) % base.length];
+    anchors.push(a);
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (segLen > maxGap) {
+      const n = Math.floor(segLen / maxGap);
+      for (let k = 1; k <= n; k++) {
+        const t = k / (n + 1);
+        anchors.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      }
+    }
+  }
   return anchors;
 }
 
