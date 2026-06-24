@@ -90,7 +90,7 @@ function detectCorners(cv, src, gray, totalArea) {
   return { edge: best, grad: best ? refineByGradient(gray, best) : null, mask: maskOut };
 }
 
-const MODE = process.argv[2] || 'paper'; // 'paper' (corners) | 'shadow' (SOD shadow-trim)
+const MODE = process.argv[2] || 'paper'; // 'paper' (corners) | 'shadow' (SOD shadow-trim) | 'tools' (classical cues)
 
 // Tool+shadow mask proxy: darker-than-paper pixels INSIDE the paper quad capture the
 // tool AND its cast shadow — exactly the over-grown region SOD produces — so we can
@@ -133,6 +133,61 @@ function suppressShadowNoise(cv, mask, full) {
     T.forEach((m) => m.delete());
     return out;
   } catch (e) { T.forEach((m) => { try { m.delete(); } catch {} }); console.log('suppress err', e.message); return mask.clone(); }
+}
+
+// ── Classical tool detector (port of cvWorker.buildToolMask) ──────────────────
+// Three cues, kept SEPARATE so we can see which one catches a given tool:
+//   chroma (coloured), dark (black/dark), variance (chrome/textured).
+const T_CHROMA = 9, DARK_K = 0.55, T_VAR = 70;
+function paperInteriorMask(cv, quad, rows, cols) {
+  const m = cv.Mat.zeros(rows, cols, cv.CV_8U);
+  const pts = cv.matFromArray(4, 1, cv.CV_32SC2, quad.flatMap((p) => [Math.round(p.x), Math.round(p.y)]));
+  const mv = new cv.MatVector(); mv.push_back(pts);
+  cv.fillPoly(m, mv, new cv.Scalar(255));
+  const margin = Math.max(10, Math.round(cols * 0.008));
+  const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(margin, margin));
+  cv.erode(m, m, k);
+  [pts, mv, k].forEach((x) => x.delete());
+  return m;
+}
+function medianMasked(cv, chan, mask) {
+  const hist = new cv.Mat(); const sv = new cv.MatVector(); sv.push_back(chan);
+  cv.calcHist(sv, [0], mask, hist, [256], [0, 256], false);
+  let total = 0; for (let i = 0; i < 256; i++) total += hist.data32F[i];
+  let sum = 0, med = 128;
+  for (let i = 0; i < 256; i++) { sum += hist.data32F[i]; if (sum >= total / 2) { med = i; break; } }
+  hist.delete(); sv.delete();
+  return med;
+}
+function buildToolMaskCues(cv, src, quad) {
+  const rows = src.rows, cols = src.cols, T = [];
+  const rgb = new cv.Mat(); cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB); T.push(rgb);
+  const lab = new cv.Mat(); cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab); T.push(lab);
+  const ch = new cv.MatVector(); cv.split(lab, ch);
+  const L = ch.get(0), A = ch.get(1), B = ch.get(2);
+  const interior = paperInteriorMask(cv, quad, rows, cols);
+  const pL = medianMasked(cv, L, interior), pA = medianMasked(cv, A, interior), pB = medianMasked(cv, B, interior);
+  const Af = new cv.Mat(), Bf = new cv.Mat(); A.convertTo(Af, cv.CV_32F); B.convertTo(Bf, cv.CV_32F); T.push(Af, Bf);
+  const pAm = new cv.Mat(rows, cols, cv.CV_32F, new cv.Scalar(pA)); const pBm = new cv.Mat(rows, cols, cv.CV_32F, new cv.Scalar(pB)); T.push(pAm, pBm);
+  const dA = new cv.Mat(), dB = new cv.Mat(); cv.absdiff(Af, pAm, dA); cv.absdiff(Bf, pBm, dB); cv.multiply(dA, dA, dA); cv.multiply(dB, dB, dB); T.push(dA, dB);
+  const chroma2 = new cv.Mat(); cv.add(dA, dB, chroma2); T.push(chroma2);
+  const chroma = new cv.Mat(); cv.threshold(chroma2, chroma, T_CHROMA * T_CHROMA, 255, cv.THRESH_BINARY); chroma.convertTo(chroma, cv.CV_8U);
+  const darkRaw = new cv.Mat(); cv.threshold(L, darkRaw, DARK_K * pL, 255, cv.THRESH_BINARY_INV); T.push(darkRaw);
+  const grayF = new cv.Mat(); L.convertTo(grayF, cv.CV_32F); T.push(grayF);
+  const vk0 = Math.max(5, Math.round(Math.min(rows, cols) * 0.012)); const kVar = vk0 % 2 ? vk0 : vk0 + 1;
+  const meanI = new cv.Mat(), meanI2 = new cv.Mat(), grayF2 = new cv.Mat(); cv.multiply(grayF, grayF, grayF2); cv.blur(grayF, meanI, new cv.Size(kVar, kVar)); cv.blur(grayF2, meanI2, new cv.Size(kVar, kVar)); T.push(meanI, meanI2, grayF2);
+  const varMat = new cv.Mat(), meanI2sq = new cv.Mat(); cv.multiply(meanI, meanI, meanI2sq); cv.absdiff(meanI2, meanI2sq, varMat); T.push(varMat, meanI2sq);
+  const var8 = new cv.Mat(); cv.threshold(varMat, var8, T_VAR, 255, cv.THRESH_BINARY); var8.convertTo(var8, cv.CV_8U); T.push(var8);
+  const dark = new cv.Mat(); cv.bitwise_and(darkRaw, var8, dark);
+  const ve0 = Math.max(3, Math.round(kVar / 2)); const evSz = ve0 % 2 ? ve0 : ve0 + 1;
+  const kVE = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(evSz, evSz));
+  const varTight = new cv.Mat(); cv.erode(var8, varTight, kVE); kVE.delete();
+  const union = new cv.Mat(); cv.bitwise_or(chroma, dark, union); cv.bitwise_or(union, varTight, union);
+  for (const m of [chroma, dark, varTight, union]) cv.bitwise_and(m, interior, m);
+  const kClean = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3)); cv.morphologyEx(union, union, cv.MORPH_OPEN, kClean); cv.morphologyEx(union, union, cv.MORPH_CLOSE, kClean); kClean.delete();
+  L.delete(); A.delete(); B.delete(); ch.delete(); interior.delete();
+  T.forEach((m) => m.delete());
+  return { chroma, dark, varTight, union };
 }
 
 function drawContours(cv, dst, binary, col, lw) {
@@ -185,6 +240,20 @@ function drawContours(cv, dst, binary, col, lw) {
           const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
           fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_shadow.png`), PNG.sync.write(png));
           rawMask.delete(); cleaned.delete(); src.delete(); gray.delete(); continue;
+        }
+
+        if (MODE === 'tools') {
+          // Render the 3 classical cues separately to see which catches each tool.
+          const cues = buildToolMaskCues(cv, src, res.grad);
+          const lw2 = Math.max(2, Math.round(width / 350));
+          drawContours(cv, src, cues.chroma, new cv.Scalar(60, 120, 255, 255), lw2);  // BLUE  = coloured cue
+          drawContours(cv, src, cues.dark, new cv.Scalar(60, 230, 60, 255), lw2);      // GREEN = dark cue
+          drawContours(cv, src, cues.varTight, new cv.Scalar(255, 40, 40, 255), lw2);  // RED   = chrome/variance cue
+          console.log(`${f.padEnd(16)} chroma=${cv.countNonZero(cues.chroma)} dark=${cv.countNonZero(cues.dark)} chrome=${cv.countNonZero(cues.varTight)} union=${cv.countNonZero(cues.union)}`);
+          const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
+          fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_tools.png`), PNG.sync.write(png));
+          cues.chroma.delete(); cues.dark.delete(); cues.varTight.delete(); cues.union.delete();
+          src.delete(); gray.delete(); continue;
         }
 
         const lw = Math.max(2, Math.round(width / 400)), cr = Math.max(4, Math.round(width / 120));
