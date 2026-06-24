@@ -534,6 +534,7 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
     activeTool,
     clearanceValue,
     updateToolOutlineSmoothed,
+    updateToolOutlineEdited,
     updateToolOutlineRefined,
     refineBrush,
   } = useAppStore();
@@ -989,7 +990,7 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
                   onDelete={removeToolOutline}
                   onImageClick={handleTracingClick}
                   onBoxSelect={handleBoxSelect}
-                  onUpdateOutline={updateToolOutlineSmoothed}
+                  onUpdateOutline={updateToolOutlineEdited}
                 />
               </div>
             )}

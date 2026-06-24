@@ -19,18 +19,19 @@ import {
 // RDP). Editing hundreds of Chaikin points is impossible; ~16-40 anchors that
 // drive a smooth curve is how vector editors work.
 function buildEditAnchors(points: Point2D[]): Point2D[] {
-  if (points.length <= 40) return [...points];
+  if (points.length <= 20) return [...points];
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
     if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
     if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
   }
   const diag = Math.hypot(maxX - minX, maxY - minY);
-  // Adapt epsilon until the anchor count lands in a comfortable editing range.
-  let eps = diag * 0.012;
+  // Adapt epsilon until the anchor count lands in a hand-editable range (~10-24).
+  // Too many handles (the old 40 cap) is unwieldy and was a user complaint.
+  let eps = diag * 0.02;
   let anchors = simplifyPath(points, eps);
-  for (let i = 0; i < 6 && anchors.length > 40; i++) { eps *= 1.4; anchors = simplifyPath(points, eps); }
-  for (let i = 0; i < 6 && anchors.length < 12; i++) { eps *= 0.6; anchors = simplifyPath(points, eps); }
+  for (let i = 0; i < 6 && anchors.length > 24; i++) { eps *= 1.4; anchors = simplifyPath(points, eps); }
+  for (let i = 0; i < 6 && anchors.length < 10; i++) { eps *= 0.6; anchors = simplifyPath(points, eps); }
   return anchors;
 }
 

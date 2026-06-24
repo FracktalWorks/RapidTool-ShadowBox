@@ -102,6 +102,7 @@ export interface AppState {
   addToolOutline: (outline: ToolOutline) => void;
   updateToolOutline: (id: string, points: Point2D[]) => void;
   updateToolOutlineSmoothed: (id: string, smoothedPoints: Point2D[]) => void;
+  updateToolOutlineEdited: (id: string, points: Point2D[]) => void;
   updateToolOutlineRefined: (id: string, points: Point2D[], samClicks: { x: number; y: number; label: number }[]) => void;
   removeToolOutline: (id: string) => void;
   selectOutline: (id: string | null) => void;
@@ -381,6 +382,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     return {
       toolOutlines: state.toolOutlines.map((o) =>
         o.id === id ? { ...o, smoothedPoints, regularizedPoints, boundingBox, area, areaInMm2 } : o
+      ),
+    };
+  }),
+
+  // Live point-editing (Edit Points tool). Unlike updateToolOutlineSmoothed,
+  // this does NOT re-run regularizeContour: the global line/arc fitter re-solves
+  // the whole shape on every drag frame, so nudging one anchor on a rounded tool
+  // makes a far edge snap into a different/bigger arc — the "shaky, big circle on
+  // the other side" bug. During editing the displayed curve must be EXACTLY the
+  // anchor-driven Chaikin curve (local + stable), so we store it as smoothedPoints
+  // and clear regularizedPoints (display falls back to smoothedPoints).
+  updateToolOutlineEdited: (id, points) => set((state) => {
+    const outline = state.toolOutlines.find(o => o.id === id);
+    if (!outline) return state;
+    const boundingBox = getBoundingBox(points);
+    const area = polygonArea(points);
+    const areaInMm2 = state.pixelsPerMm ? area / (state.pixelsPerMm * state.pixelsPerMm) : undefined;
+    return {
+      toolOutlines: state.toolOutlines.map((o) =>
+        o.id === id ? { ...o, smoothedPoints: points, regularizedPoints: undefined, boundingBox, area, areaInMm2 } : o
       ),
     };
   }),
