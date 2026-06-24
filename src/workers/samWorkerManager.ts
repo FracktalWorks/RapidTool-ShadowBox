@@ -113,6 +113,12 @@ export async function samSegmentPoint(
   opts?: { paperCorners?: PaperCorners; onProgress?: (p: SamLoadProgress) => void },
 ): Promise<ToolTracingResult | null> {
   const imageData = await getImageData(imageUrl);
+  const imgW = imageData.width, imgH = imageData.height;
+  // The SAM request below TRANSFERS imageData.data.buffer to the worker, detaching
+  // it — so snapshot the pixels NOW for the post-segmentation shadow-suppress pass.
+  // (Without this, reusing the detached buffer throws DataCloneError and the
+  // add-click silently fails to merge.)
+  const rgbaSnapshot = imageData.data.slice();
   const seg = await request<{ mask: ArrayBuffer; width: number; height: number; score: number; scale: number } | null>(
     'segmentPoint',
     {
@@ -120,8 +126,8 @@ export async function samSegmentPoint(
       clicks,
       paperCorners: opts?.paperCorners,
       rgbaData: imageData.data,
-      width: imageData.width,
-      height: imageData.height
+      width: imgW,
+      height: imgH
     },
     opts?.onProgress,
   );
@@ -131,9 +137,9 @@ export async function samSegmentPoint(
   // Pass the source image so the worker shadow-suppresses the SAM mask (drops the
   // cast-shadow spill SAM grabs on shadowed tools) before tracing the contour.
   const contour = await contourFromMask(seg.mask, seg.width, seg.height, {
-    rgba: imageData.data.buffer as ArrayBuffer,
-    width: imageData.width,
-    height: imageData.height,
+    rgba: rgbaSnapshot.buffer as ArrayBuffer,
+    width: imgW,
+    height: imgH,
   });
   const result = scaleResult(contour, seg.scale);
   if (!result) return null;
