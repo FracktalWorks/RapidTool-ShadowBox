@@ -227,6 +227,47 @@ export async function samAutoSegment(
   return out;
 }
 
+/**
+ * DEEP detection (AMG-style): SAM lays a dense grid of point prompts over the
+ * paper, segments at each, and NMS-dedupes the survivors — no classical proposer.
+ * Catches chrome-on-white that SOD/classical miss, at the cost of more compute
+ * (opt-in "Deep Detect"). Reuses the SAME contour + paper-bounds post-processing
+ * as the fast path.
+ */
+export async function samAutoSegmentDense(
+  imageUrl: string,
+  paperCorners?: PaperCorners,
+  onProgress?: (p: SamLoadProgress) => void,
+): Promise<ToolTracingResult[]> {
+  if (!paperCorners) return [];
+  const imageData = await getImageData(imageUrl);
+  const res = await request<{ masks: { mask: ArrayBuffer; width: number; height: number; score: number }[]; scale: number }>(
+    'autoSegmentDense',
+    {
+      url: imageUrl,
+      paperCorners,
+      rgbaData: imageData.data,
+      width: imageData.width,
+      height: imageData.height,
+    },
+    onProgress,
+  );
+  everLoaded = true;
+
+  const out: ToolTracingResult[] = [];
+  for (const m of res.masks) {
+    const contour = await contourFromMask(m.mask, m.width, m.height);
+    const scaled = scaleResult(contour, res.scale);
+    if (!scaled || scaled.points.length < 3) continue;
+    let cx = 0, cy = 0;
+    for (const p of scaled.points) { cx += p.x; cy += p.y; }
+    cx /= scaled.points.length; cy /= scaled.points.length;
+    if (!pointInQuad(cx, cy, paperCorners)) continue;
+    out.push({ ...scaled, confidence: m.score });
+  }
+  return out;
+}
+
 /** Drop the cached image embedding (e.g. when the image changes). */
 export async function samClear(): Promise<void> {
   if (!worker) return;
