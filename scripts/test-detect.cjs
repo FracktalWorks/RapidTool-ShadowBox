@@ -20,6 +20,7 @@ const KNOBS = {
   blur: 15, closeK: 25, openK: 31,
   whiteValMin: 155, whiteSatMax: 70,
   gradThresh: 18, gradSearchPct: 0.05, ransacTol: 2.5,
+  shadowRpct: 0.02, // suppressShadowNoise support radius (fraction of min dim)
   dumpMask: false,
 };
 
@@ -89,6 +90,58 @@ function detectCorners(cv, src, gray, totalArea) {
   return { edge: best, grad: best ? refineByGradient(gray, best) : null, mask: maskOut };
 }
 
+const MODE = process.argv[2] || 'paper'; // 'paper' (corners) | 'shadow' (SOD shadow-trim)
+
+// Tool+shadow mask proxy: darker-than-paper pixels INSIDE the paper quad capture the
+// tool AND its cast shadow — exactly the over-grown region SOD produces — so we can
+// test suppressShadowNoise without running the ONNX model.
+function toolShadowMask(cv, gray, quad) {
+  const raw = new cv.Mat(); cv.threshold(gray, raw, 205, 255, cv.THRESH_BINARY_INV);
+  const quadMask = cv.Mat.zeros(gray.rows, gray.cols, cv.CV_8UC1);
+  const pts = cv.matFromArray(4, 1, cv.CV_32SC2, quad.flatMap((p) => [Math.round(p.x), Math.round(p.y)]));
+  const mv = new cv.MatVector(); mv.push_back(pts);
+  cv.fillPoly(quadMask, mv, new cv.Scalar(255));
+  const e = Math.max(3, Math.round(0.04 * Math.min(gray.rows, gray.cols)));
+  const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(e, e));
+  cv.erode(quadMask, quadMask, k);
+  const tool = new cv.Mat(); cv.bitwise_and(raw, quadMask, tool);
+  [raw, quadMask, pts, mv, k].forEach((m) => m.delete());
+  return tool;
+}
+
+// Exact port of cvWorker.suppressShadowNoise (the fix under test): keep mask pixels
+// near sharp edges, hole-fill → tool interior refills, blurry shadow halo dropped.
+function suppressShadowNoise(cv, mask, full) {
+  const T = [];
+  try {
+    const gray = new cv.Mat(); cv.cvtColor(full, gray, cv.COLOR_RGBA2GRAY); T.push(gray);
+    const gx = new cv.Mat(), gy = new cv.Mat(); T.push(gx, gy);
+    cv.Sobel(gray, gx, cv.CV_16S, 1, 0, 3); cv.Sobel(gray, gy, cv.CV_16S, 0, 1, 3);
+    cv.convertScaleAbs(gx, gx); cv.convertScaleAbs(gy, gy);
+    const mag = new cv.Mat(); cv.addWeighted(gx, 0.5, gy, 0.5, 0, mag); T.push(mag);
+    const sharp = new cv.Mat(); cv.threshold(mag, sharp, KNOBS.gradThresh, 255, cv.THRESH_BINARY); T.push(sharp);
+    const R = Math.max(5, Math.round(KNOBS.shadowRpct * Math.min(gray.rows, gray.cols)));
+    const ker = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(R, R)); T.push(ker);
+    const supported = new cv.Mat(); cv.dilate(sharp, supported, ker); T.push(supported);
+    const keep = new cv.Mat(); cv.bitwise_and(mask, supported, keep); T.push(keep);
+    const ff = keep.clone(); T.push(ff);
+    const ffMask = new cv.Mat(keep.rows + 2, keep.cols + 2, cv.CV_8UC1, new cv.Scalar(0)); T.push(ffMask);
+    cv.floodFill(ff, ffMask, new cv.Point(0, 0), new cv.Scalar(255));
+    const inv = new cv.Mat(); cv.bitwise_not(ff, inv); T.push(inv);
+    const filled = new cv.Mat(); cv.bitwise_or(keep, inv, filled); T.push(filled);
+    const out = cv.countNonZero(filled) < 0.3 * Math.max(1, cv.countNonZero(mask)) ? mask.clone() : filled.clone();
+    T.forEach((m) => m.delete());
+    return out;
+  } catch (e) { T.forEach((m) => { try { m.delete(); } catch {} }); console.log('suppress err', e.message); return mask.clone(); }
+}
+
+function drawContours(cv, dst, binary, col, lw) {
+  const cs = new cv.MatVector(), h = new cv.Mat();
+  cv.findContours(binary, cs, h, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  for (let i = 0; i < cs.size(); i++) cv.drawContours(dst, cs, i, col, lw);
+  cs.delete(); h.delete();
+}
+
 // OpenCV.js BLOCKS the event loop after its init callback fires, so any `await` after
 // init never resumes. Work around it: decode every input image FIRST (async sharp),
 // then load OpenCV and do all CV work + output SYNCHRONOUSLY inside onRuntimeInitialized
@@ -119,6 +172,21 @@ function detectCorners(cv, src, gray, totalArea) {
           fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_mask.png`), PNG.sync.write(mp)); mc.delete(); res.mask.delete();
         }
         if (!res.edge) { console.log(`${f.padEnd(16)} NO PAPER`); src.delete(); gray.delete(); continue; }
+
+        if (MODE === 'shadow') {
+          // Build the tool+shadow proxy mask, run the fix, draw raw (RED) vs cleaned (GREEN).
+          const rawMask = toolShadowMask(cv, gray, res.grad);
+          const cleaned = suppressShadowNoise(cv, rawMask, src);
+          const lw2 = Math.max(2, Math.round(width / 350));
+          drawContours(cv, src, rawMask, new cv.Scalar(255, 40, 40, 255), lw2);   // RED  = with shadow (raw SOD-like)
+          drawContours(cv, src, cleaned, new cv.Scalar(40, 230, 40, 255), lw2);   // GREEN = after shadow-suppress
+          const aR = cv.countNonZero(rawMask), aC = cv.countNonZero(cleaned);
+          console.log(`${f.padEnd(16)} raw=${aR} cleaned=${aC} kept=${(100 * aC / Math.max(1, aR)).toFixed(0)}%`);
+          const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
+          fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_shadow.png`), PNG.sync.write(png));
+          rawMask.delete(); cleaned.delete(); src.delete(); gray.delete(); continue;
+        }
+
         const lw = Math.max(2, Math.round(width / 400)), cr = Math.max(4, Math.round(width / 120));
         const drawQuad = (q, col) => { for (let i = 0; i < 4; i++) cv.line(src, new cv.Point(q[i].x, q[i].y), new cv.Point(q[(i + 1) % 4].x, q[(i + 1) % 4].y), col, lw); for (const p of q) cv.circle(src, new cv.Point(p.x, p.y), cr, col, -1); };
         drawQuad(res.edge, new cv.Scalar(0, 220, 0, 255));   // GREEN = mask/edge-line stage
