@@ -1178,7 +1178,16 @@ function suppressShadowNoise(mask: any, imageData: ImageData): any {
     cv.floodFill(ff, ffMask, new cv.Point(0, 0), new cv.Scalar(255));
     inv = new cv.Mat(); cv.bitwise_not(ff, inv);
     filled = new cv.Mat(); cv.bitwise_or(keep, inv, filled);
-    if (cv.countNonZero(filled) < 0.3 * Math.max(1, cv.countNonZero(mask))) return mask.clone();
+    // Guard BOTH failure modes by comparing to the input mask:
+    //  • over-removal (<30%): weak-edged tool gutted → keep the input.
+    //  • over-fill (>150%): the hole-fill enclosed spurious background. On an
+    //    outdoor/edge-heavy shot the paper border itself is a strong "supported"
+    //    edge, so floodFill from the corner can't reach inside the sheet and the
+    //    WHOLE paper interior fills in — ballooning a clean 71k mask to 376k
+    //    (53% of frame). Untrustworthy → keep the input mask unchanged.
+    const nMask = Math.max(1, cv.countNonZero(mask));
+    const nFilled = cv.countNonZero(filled);
+    if (nFilled < 0.3 * nMask || nFilled > 1.5 * nMask) return mask.clone();
     return filled.clone();
   } catch (e) {
     console.warn('shadow/noise suppress skipped:', e instanceof Error ? e.message : e);
