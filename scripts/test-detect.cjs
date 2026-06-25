@@ -90,7 +90,7 @@ function detectCorners(cv, src, gray, totalArea) {
   return { edge: best, grad: best ? refineByGradient(gray, best) : null, mask: maskOut };
 }
 
-const MODE = process.argv[2] || 'paper'; // 'paper' (corners) | 'shadow' (SOD shadow-trim) | 'tools' (classical cues)
+const MODE = process.argv[2] || 'paper'; // 'paper' | 'shadow' | 'tools' | 'finalize' (Stage B contour finalizer)
 
 // Tool+shadow mask proxy: darker-than-paper pixels INSIDE the paper quad capture the
 // tool AND its cast shadow — exactly the over-grown region SOD produces — so we can
@@ -190,6 +190,128 @@ function buildToolMaskCues(cv, src, quad) {
   return { chroma, dark, varTight, union };
 }
 
+// ── Stage B: finalizeContour prototype (shadow matting + active-contour snake) ─
+function gradMag32(cv, gray) {
+  const gx = new cv.Mat(), gy = new cv.Mat(), mag = new cv.Mat();
+  cv.Sobel(gray, gx, cv.CV_32F, 1, 0, 3);
+  cv.Sobel(gray, gy, cv.CV_32F, 0, 1, 3);
+  cv.magnitude(gx, gy, mag);
+  gx.delete(); gy.delete();
+  return mag; // CV_32F
+}
+
+// Keep only the largest connected blob, solid-filled (hole-filled).
+function cleanMask(cv, mask) {
+  const cs = new cv.MatVector(), h = new cv.Mat();
+  cv.findContours(mask, cs, h, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  let best = -1, bestA = 0;
+  for (let i = 0; i < cs.size(); i++) { const a = cv.contourArea(cs.get(i)); if (a > bestA) { bestA = a; best = i; } }
+  const out = cv.Mat.zeros(mask.rows, mask.cols, cv.CV_8UC1);
+  if (best >= 0) cv.drawContours(out, cs, best, new cv.Scalar(255), -1);
+  cs.delete(); h.delete();
+  return out;
+}
+
+// Shadow removal by COLOUR PHYSICS (the principled replacement for the gradient
+// heuristic): a cast shadow is paper-hue (small a/b chroma distance from the
+// sheet), darker than paper but not black, and smooth (low gradient). Dark/black
+// tools (very low L) and chrome (textured/edged) are spared by the AND of cues.
+function removeShadow(cv, mask, src, quad, knobs) {
+  const k = knobs || {};
+  const chromaTol = k.chromaTol ?? 11, gradTol = k.gradTol ?? 60, darkLo = k.darkLo ?? 0.40, darkHi = k.darkHi ?? 0.94;
+  const rows = src.rows, cols = src.cols, T = [];
+  const rgb = new cv.Mat(); cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB); T.push(rgb);
+  const lab = new cv.Mat(); cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab); T.push(lab);
+  const ch = new cv.MatVector(); cv.split(lab, ch);
+  const L = ch.get(0), A = ch.get(1), B = ch.get(2);
+  const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY); T.push(gray);
+  const mag = gradMag32(cv, gray); T.push(mag);
+  const interior = paperInteriorMask(cv, quad, rows, cols); T.push(interior);
+  const pL = medianMasked(cv, L, interior), pA = medianMasked(cv, A, interior), pB = medianMasked(cv, B, interior);
+  const out = mask.clone();
+  const Ld = L.data, Ad = A.data, Bd = B.data, md = mag.data32F, od = out.data, mk = mask.data;
+  for (let i = 0; i < rows * cols; i++) {
+    if (!mk[i]) continue;
+    const chroma = Math.abs(Ad[i] - pA) + Math.abs(Bd[i] - pB);
+    const dark = Ld[i] < pL * darkHi && Ld[i] > pL * darkLo;
+    if (chroma < chromaTol && dark && md[i] < gradTol) od[i] = 0; // shadow → background
+  }
+  L.delete(); A.delete(); B.delete(); ch.delete();
+  T.forEach((m) => m.delete());
+  const cleaned = cleanMask(cv, out);
+  out.delete();
+  return cleaned;
+}
+
+// Even arc-length resample of a closed polygon to N points.
+function resampleClosed(poly, N) {
+  const n = poly.length;
+  let perim = 0;
+  for (let i = 0; i < n; i++) { const a = poly[i], b = poly[(i + 1) % n]; perim += Math.hypot(b.x - a.x, b.y - a.y); }
+  const step = perim / N;
+  const out = [];
+  let d = 0, next = 0;
+  for (let i = 0; i < n && out.length < N; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    while (next <= d + segLen && out.length < N) {
+      const t = segLen > 0 ? (next - d) / segLen : 0;
+      out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      next += step;
+    }
+    d += segLen;
+  }
+  return out;
+}
+
+// Active contour (snake): evolve the boundary to the image gradient (data term)
+// while a Laplacian smoothness term resists jaggedness and carries the curve
+// cleanly through blur (where the gradient is weak). The regularizer is what
+// turns a naive edge-snap ("snaps to noise") into an intelligent contour.
+function snakeRefine(cv, mask, gray, knobs) {
+  const k = knobs || {};
+  const search = k.search ?? 9, iters = k.iters ?? 10, alpha = k.alpha ?? 0.45, gthr = k.gthr ?? 25, N = k.N ?? 420;
+  const cs = new cv.MatVector(), h = new cv.Mat();
+  cv.findContours(mask, cs, h, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  let best = null, bestA = 0;
+  for (let i = 0; i < cs.size(); i++) { const c = cs.get(i); const a = cv.contourArea(c); if (a > bestA) { bestA = a; best = c; } }
+  if (!best) { cs.delete(); h.delete(); return []; }
+  const d = best.data32S, n = best.rows;
+  const poly = [];
+  for (let i = 0; i < n; i++) poly.push({ x: d[i * 2], y: d[i * 2 + 1] });
+  cs.delete(); h.delete();
+  let pts = resampleClosed(poly, N);
+  const M = pts.length;
+  if (M < 8) return pts;
+
+  const g = gray.data, cols = gray.cols, rows = gray.rows;
+  const gAt = (x, y) => { const xi = x < 0 ? 0 : x >= cols ? cols - 1 : x | 0, yi = y < 0 ? 0 : y >= rows ? rows - 1 : y | 0; return g[yi * cols + xi]; };
+  for (let it = 0; it < iters; it++) {
+    const targets = new Array(M);
+    for (let i = 0; i < M; i++) {
+      const pa = pts[(i - 1 + M) % M], p = pts[i], pb = pts[(i + 1) % M];
+      const tx = pb.x - pa.x, ty = pb.y - pa.y, tl = Math.hypot(tx, ty) || 1;
+      const nx = -ty / tl, ny = tx / tl; // unit normal
+      let bT = 0, bG = -1;
+      for (let s = -search; s <= search; s++) {
+        const x = p.x + nx * s, y = p.y + ny * s;
+        const gg = Math.abs(gAt(x + nx, y + ny) - gAt(x - nx, y - ny));
+        if (gg > bG) { bG = gg; bT = s; }
+      }
+      targets[i] = bG > gthr ? { x: p.x + nx * bT, y: p.y + ny * bT } : null;
+    }
+    const np = new Array(M);
+    for (let i = 0; i < M; i++) {
+      const pa = pts[(i - 1 + M) % M], p = pts[i], pb = pts[(i + 1) % M];
+      const sx = 0.25 * pa.x + 0.5 * p.x + 0.25 * pb.x, sy = 0.25 * pa.y + 0.5 * p.y + 0.25 * pb.y; // Laplacian smooth
+      const t = targets[i];
+      np[i] = t ? { x: (1 - alpha) * sx + alpha * t.x, y: (1 - alpha) * sy + alpha * t.y } : { x: sx, y: sy };
+    }
+    pts = np;
+  }
+  return pts;
+}
+
 function drawContours(cv, dst, binary, col, lw) {
   const cs = new cv.MatVector(), h = new cv.Mat();
   cv.findContours(binary, cs, h, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
@@ -240,6 +362,28 @@ function drawContours(cv, dst, binary, col, lw) {
           const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
           fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_shadow.png`), PNG.sync.write(png));
           rawMask.delete(); cleaned.delete(); src.delete(); gray.delete(); continue;
+        }
+
+        if (MODE === 'finalize') {
+          // Stage B prototype: rough mask (classical tool cues, jagged + some
+          // shadow) -> shadow matting -> snake. RED = raw rough boundary ·
+          // BLUE = after shadow removal · GREEN = final snake contour.
+          const cues = buildToolMaskCues(cv, src, res.grad);
+          const rough = cleanMask(cv, cues.union); // largest tool blob, hole-filled
+          cues.chroma.delete(); cues.dark.delete(); cues.varTight.delete(); cues.union.delete();
+          const shadowFree = removeShadow(cv, rough, src, res.grad, {});
+          const snakePts = snakeRefine(cv, shadowFree, gray, {});
+          const lw2 = Math.max(2, Math.round(width / 320));
+          drawContours(cv, src, rough, new cv.Scalar(255, 40, 40, 255), lw2);        // RED  = raw rough
+          drawContours(cv, src, shadowFree, new cv.Scalar(60, 120, 255, 255), lw2);  // BLUE = shadow removed
+          for (let i = 0; i < snakePts.length; i++) {                                 // GREEN = final snake
+            const a = snakePts[i], b = snakePts[(i + 1) % snakePts.length];
+            cv.line(src, new cv.Point(a.x, a.y), new cv.Point(b.x, b.y), new cv.Scalar(40, 230, 40, 255), lw2);
+          }
+          console.log(`${f.padEnd(16)} rough=${cv.countNonZero(rough)} shadowFree=${cv.countNonZero(shadowFree)} snake=${snakePts.length}pts`);
+          const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
+          fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_finalize.png`), PNG.sync.write(png));
+          rough.delete(); shadowFree.delete(); src.delete(); gray.delete(); continue;
         }
 
         if (MODE === 'tools') {
