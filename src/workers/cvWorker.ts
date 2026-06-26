@@ -989,21 +989,33 @@ function extractContourPoints(
 // Shared core: a solid binary mask (CV_8U, 0/255) → one gated TraceResult per
 // connected tool. Used by BOTH the classical path (buildToolMask) and the SOD
 // path (trained-model mask). Mutates `mask` (hole-fill). Caller frees `mask`.
-function tracePreparedMask(mask: any, rows: number, cols: number, trusted = false): TraceResult[] {
+function tracePreparedMask(mask: any, rows: number, cols: number, trusted = false, finalizeImage?: ImageData): TraceResult[] {
   const totalArea = rows * cols;
   const maskPx = cv.countNonZero(mask);
-  console.log(`tracePreparedMask: input mask=${maskPx}px (${(100 * maskPx / totalArea).toFixed(1)}% of frame)${trusted ? ' [SOD/trusted]' : ' [classical]'}`);
+  console.log(`tracePreparedMask: input mask=${maskPx}px (${(100 * maskPx / totalArea).toFixed(1)}% of frame)${trusted ? ' [SOD/trusted]' : ' [classical]'}${finalizeImage ? ' [snake]' : ''}`);
 
-  // GENTLE boundary clean-up before tracing. A morphological close removes
-  // single-pixel jaggies left by shadow-suppress WITHOUT rounding off the tool's
-  // real curves and corners — edge/curve precision is the priority. (An earlier
-  // aggressive 0.012 kernel was added to envelope screw threads, but it visibly
-  // rounded smooth tools; precision wins. Residual thread serration is better
-  // handled by the GrabCut edge-snap upstream than by blurring the whole outline.)
-  const smoothK = Math.max(3, Math.round(Math.min(rows, cols) * 0.004)) | 1;
-  const smoothKer = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(smoothK, smoothK));
-  cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, smoothKer);
-  smoothKer.delete();
+  // Stage B snake source: a grayscale aligned to the mask, used to evolve each
+  // gated contour to the real image edge. When present, we SKIP the smoothing
+  // close (the snake's regularizer does smoothing + edge-snap together).
+  let grayFinal: any = null;
+  if (finalizeImage) {
+    const f = cv.matFromImageData(finalizeImage);
+    grayFinal = new cv.Mat();
+    if (f.cols !== cols || f.rows !== rows) {
+      const r = new cv.Mat(); cv.resize(f, r, new cv.Size(cols, rows), 0, 0, cv.INTER_AREA);
+      cv.cvtColor(r, grayFinal, cv.COLOR_RGBA2GRAY); r.delete();
+    } else {
+      cv.cvtColor(f, grayFinal, cv.COLOR_RGBA2GRAY);
+    }
+    f.delete();
+  } else {
+    // GENTLE boundary clean-up before tracing (classical path). A morphological
+    // close removes single-pixel jaggies WITHOUT rounding off real curves.
+    const smoothK = Math.max(3, Math.round(Math.min(rows, cols) * 0.004)) | 1;
+    const smoothKer = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(smoothK, smoothK));
+    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, smoothKer);
+    smoothKer.delete();
+  }
 
   // Fill internal holes / shadow loops before tracing outer contours.
   const tempContours = new cv.MatVector();
@@ -1054,13 +1066,19 @@ function tracePreparedMask(mask: any, rows: number, cols: number, trusted = fals
     }
 
     const confidence = contourConfidence(contour);
-    // Trusted SOD masks are already edge-snapped by GrabCut — trace them tightly
-    // so real curves/edges are preserved; the classical path stays a touch looser.
-    results.push(extractContourPoints(contour, 0, 0, area, confidence, trusted ? 0.5 : 1));
+    if (grayFinal) {
+      // Stage B: active-contour snake → smooth, edge-accurate outer contour.
+      results.push({ points: snakeRefineContour(contour, grayFinal), area, confidence });
+    } else {
+      // Trusted SOD masks are already edge-snapped by GrabCut — trace tightly so
+      // real curves/edges are preserved; the classical path stays a touch looser.
+      results.push(extractContourPoints(contour, 0, 0, area, confidence, trusted ? 0.5 : 1));
+    }
     console.log(`Found tool: area=${Math.round(area)}, conf=${confidence.toFixed(2)}, minorDim=${minorDim.toFixed(0)}, aspect=${aspect.toFixed(1)}`);
     contour.delete();
   }
 
+  if (grayFinal) grayFinal.delete();
   deleteMats(contours, hierarchy);
   return results;
 }
@@ -1197,6 +1215,119 @@ function suppressShadowNoise(mask: any, imageData: ImageData): any {
   }
 }
 
+// ============================================================================
+// Stage B — Contour Finalizer (ported from the validated harness prototype)
+//   Lab colour-physics shadow matting  +  regularized active-contour snake.
+//   Replaces the fragile suppressShadowNoise hole-fill + smoothing-close on the
+//   SOD path. Deterministic, no training. See memory: stage-b-contour-finalizer.
+// ============================================================================
+
+function gradMagF(gray: any): any {
+  const gx = new cv.Mat(), gy = new cv.Mat(), mag = new cv.Mat();
+  cv.Sobel(gray, gx, cv.CV_32F, 1, 0, 3);
+  cv.Sobel(gray, gy, cv.CV_32F, 0, 1, 3);
+  cv.magnitude(gx, gy, mag);
+  deleteMats(gx, gy);
+  return mag; // CV_32F
+}
+
+// Shadow removal by COLOUR PHYSICS: a cast shadow is paper-hue (small a/b chroma
+// distance from the sheet), darker than paper but not black, and smooth (low
+// gradient). Dark/black tools and chrome (textured/edged) are spared by the AND
+// of cues. Only REMOVES pixels (no hole-fill) so it can NEVER balloon, and it
+// preserves all components (multi-tool). Guarded: if it would gut the mask
+// (>70% removed) keep the input.
+function removeShadowColor(mask: any, imageData: ImageData): any {
+  const T: any[] = [];
+  try {
+    let full = cv.matFromImageData(imageData); T.push(full);
+    if (full.cols !== mask.cols || full.rows !== mask.rows) {
+      const r = new cv.Mat(); cv.resize(full, r, new cv.Size(mask.cols, mask.rows), 0, 0, cv.INTER_AREA); full = r; T.push(r);
+    }
+    const rgb = new cv.Mat(); cv.cvtColor(full, rgb, cv.COLOR_RGBA2RGB); T.push(rgb);
+    const lab = new cv.Mat(); cv.cvtColor(rgb, lab, cv.COLOR_RGB2Lab); T.push(lab);
+    const ch = new cv.MatVector(); cv.split(lab, ch);
+    const L = ch.get(0), A = ch.get(1), B = ch.get(2);
+    const gray = new cv.Mat(); cv.cvtColor(full, gray, cv.COLOR_RGBA2GRAY); T.push(gray);
+    const mag = gradMagF(gray); T.push(mag);
+    const border = borderMask(mask.rows, mask.cols); T.push(border);
+    const pL = medianMasked(L, border), pA = medianMasked(A, border), pB = medianMasked(B, border);
+    const out = mask.clone();
+    const Ld = L.data, Ad = A.data, Bd = B.data, md = mag.data32F, od = out.data, mk = mask.data;
+    for (let i = 0; i < mask.rows * mask.cols; i++) {
+      if (!mk[i]) continue;
+      const chroma = Math.abs(Ad[i] - pA) + Math.abs(Bd[i] - pB);
+      if (chroma < 11 && Ld[i] < pL * 0.94 && Ld[i] > pL * 0.40 && md[i] < 60) od[i] = 0; // shadow → background
+    }
+    L.delete(); A.delete(); B.delete(); ch.delete();
+    const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+    cv.morphologyEx(out, out, cv.MORPH_OPEN, k); k.delete();
+    const ret = cv.countNonZero(out) < 0.3 * Math.max(1, cv.countNonZero(mask)) ? mask.clone() : out.clone();
+    out.delete();
+    T.forEach((m) => m.delete());
+    return ret;
+  } catch (e) {
+    T.forEach((m) => { try { m.delete(); } catch { /* noop */ } });
+    console.warn('removeShadowColor skipped:', e instanceof Error ? e.message : e);
+    return mask.clone();
+  }
+}
+
+// Even arc-length resample of a closed polygon to N points.
+function resampleClosed(poly: Point2D[], N: number): Point2D[] {
+  const n = poly.length; let perim = 0;
+  for (let i = 0; i < n; i++) { const a = poly[i], b = poly[(i + 1) % n]; perim += Math.hypot(b.x - a.x, b.y - a.y); }
+  const step = perim / N; const out: Point2D[] = []; let d = 0, next = 0;
+  for (let i = 0; i < n && out.length < N; i++) {
+    const a = poly[i], b = poly[(i + 1) % n]; const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    while (next <= d + segLen && out.length < N) { const t = segLen > 0 ? (next - d) / segLen : 0; out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }); next += step; }
+    d += segLen;
+  }
+  return out;
+}
+
+// Active contour (snake): evolve the boundary to the image gradient (data term)
+// while a Laplacian smoothness term resists jaggedness and carries the curve
+// cleanly through blur. The regularizer is what makes this "intelligent" rather
+// than a naive edge-snap. Operates on ONE gated contour; returns ordered points.
+function snakeRefineContour(contour: any, gray: any, knobs?: any): Point2D[] {
+  const k = knobs || {};
+  const search = k.search ?? 9, iters = k.iters ?? 10, alpha = k.alpha ?? 0.45, gthr = k.gthr ?? 25, N = k.N ?? 420;
+  const d = contour.data32S, n = contour.rows;
+  const poly: Point2D[] = [];
+  for (let i = 0; i < n; i++) poly.push({ x: d[i * 2], y: d[i * 2 + 1] });
+  if (n < 8) return poly;
+  let pts = resampleClosed(poly, N);
+  const M = pts.length;
+  if (M < 8) return pts;
+  const g = gray.data, cols = gray.cols, rows = gray.rows;
+  const gAt = (x: number, y: number) => { const xi = x < 0 ? 0 : x >= cols ? cols - 1 : x | 0, yi = y < 0 ? 0 : y >= rows ? rows - 1 : y | 0; return g[yi * cols + xi]; };
+  for (let it = 0; it < iters; it++) {
+    const targets: (Point2D | null)[] = new Array(M);
+    for (let i = 0; i < M; i++) {
+      const pa = pts[(i - 1 + M) % M], p = pts[i], pb = pts[(i + 1) % M];
+      const tx = pb.x - pa.x, ty = pb.y - pa.y, tl = Math.hypot(tx, ty) || 1;
+      const nx = -ty / tl, ny = tx / tl;
+      let bT = 0, bG = -1;
+      for (let s = -search; s <= search; s++) {
+        const x = p.x + nx * s, y = p.y + ny * s;
+        const gg = Math.abs(gAt(x + nx, y + ny) - gAt(x - nx, y - ny));
+        if (gg > bG) { bG = gg; bT = s; }
+      }
+      targets[i] = bG > gthr ? { x: p.x + nx * bT, y: p.y + ny * bT } : null;
+    }
+    const np: Point2D[] = new Array(M);
+    for (let i = 0; i < M; i++) {
+      const pa = pts[(i - 1 + M) % M], p = pts[i], pb = pts[(i + 1) % M];
+      const sx = 0.25 * pa.x + 0.5 * p.x + 0.25 * pb.x, sy = 0.25 * pa.y + 0.5 * p.y + 0.25 * pb.y;
+      const t = targets[i];
+      np[i] = t ? { x: (1 - alpha) * sx + alpha * t.x, y: (1 - alpha) * sy + alpha * t.y } : { x: sx, y: sy };
+    }
+    pts = np;
+  }
+  return pts;
+}
+
 function traceMask(maskData: Uint8Array, width: number, height: number, imageData?: ImageData): TraceResult[] {
   const raw = new cv.Mat(height, width, cv.CV_8UC1);
   raw.data.set(maskData);
@@ -1204,12 +1335,15 @@ function traceMask(maskData: Uint8Array, width: number, height: number, imageDat
   let mask = imageData ? refineMaskToEdges(raw, imageData) : raw.clone();
   if (imageData) {
     console.log(`traceMask: after edge-refine=${cv.countNonZero(mask)}px`);
-    const cleaned = suppressShadowNoise(mask, imageData); mask.delete(); mask = cleaned;
-    console.log(`traceMask: after shadow-suppress=${cv.countNonZero(mask)}px`);
+    // Stage B shadow matting (colour physics) — replaces the old hole-fill
+    // suppressShadowNoise on the SOD path. Can't balloon; multi-tool safe.
+    const cleaned = removeShadowColor(mask, imageData); mask.delete(); mask = cleaned;
+    console.log(`traceMask: after shadow-color-removal=${cv.countNonZero(mask)}px`);
   }
-  const results = tracePreparedMask(mask, height, width, true);
+  // Pass the image so tracePreparedMask snakes each contour to the real edge.
+  const results = tracePreparedMask(mask, height, width, true, imageData);
   deleteMats(raw, mask);
-  console.log(`traceMask: found ${results.length} tools${imageData ? ' (edge-refined, shadow-suppressed)' : ''}`);
+  console.log(`traceMask: found ${results.length} tools${imageData ? ' (Stage B: shadow-matted + snake)' : ''}`);
   return results;
 }
 
