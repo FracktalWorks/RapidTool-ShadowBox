@@ -90,7 +90,7 @@ function detectCorners(cv, src, gray, totalArea) {
   return { edge: best, grad: best ? refineByGradient(gray, best) : null, mask: maskOut };
 }
 
-const MODE = process.argv[2] || 'paper'; // 'paper' | 'shadow' | 'tools' | 'finalize' (Stage B contour finalizer)
+const MODE = process.argv[2] || 'paper'; // 'paper'|'shadow'|'tools'|'finalize'|'score'|'pfinal' (principled: mm + adaptive + matting)
 
 // Tool+shadow mask proxy: darker-than-paper pixels INSIDE the paper quad capture the
 // tool AND its cast shadow — exactly the over-grown region SOD produces — so we can
@@ -228,16 +228,24 @@ function removeShadow(cv, mask, src, quad, knobs) {
   const mag = gradMag32(cv, gray); T.push(mag);
   const interior = paperInteriorMask(cv, quad, rows, cols); T.push(interior);
   const pL = medianMasked(cv, L, interior), pA = medianMasked(cv, A, interior), pB = medianMasked(cv, B, interior);
+  // TRIMAP: protect the eroded interior core — shadow lives at the boundary, never
+  // deep inside. Without this a flat GREY tool surface (gearbox/aluminium body)
+  // reads as achromatic+darker+smooth = shadow and gets wrongly carved out.
+  const core = new cv.Mat();
+  const eb = Math.max(8, Math.round(0.02 * Math.min(rows, cols)));
+  const ek = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(eb, eb));
+  cv.erode(mask, core, ek); ek.delete(); T.push(core);
   const out = mask.clone();
-  const Ld = L.data, Ad = A.data, Bd = B.data, md = mag.data32F, od = out.data, mk = mask.data;
+  const Ld = L.data, Ad = A.data, Bd = B.data, md = mag.data32F, od = out.data, mk = mask.data, cd = core.data;
   for (let i = 0; i < rows * cols; i++) {
-    if (!mk[i]) continue;
+    if (!mk[i] || cd[i]) continue; // skip background AND the protected interior core
     const chroma = Math.abs(Ad[i] - pA) + Math.abs(Bd[i] - pB);
     const dark = Ld[i] < pL * darkHi && Ld[i] > pL * darkLo;
-    if (chroma < chromaTol && dark && md[i] < gradTol) od[i] = 0; // shadow → background
+    if (chroma < chromaTol && dark && md[i] < gradTol) od[i] = 0; // boundary shadow → background
   }
   L.delete(); A.delete(); B.delete(); ch.delete();
   T.forEach((m) => m.delete());
+  if (k.keepAll) return out; // multi-tool: caller finds components
   const cleaned = cleanMask(cv, out);
   out.delete();
   return cleaned;
@@ -284,32 +292,103 @@ function snakeRefine(cv, mask, gray, knobs) {
   const M = pts.length;
   if (M < 8) return pts;
 
+  const outer = k.outer ?? true;        // ride the OUTERMOST edge (envelope)
+  const balloon = k.balloon ?? 0.7;     // outward pressure where there's no edge
   const g = gray.data, cols = gray.cols, rows = gray.rows;
   const gAt = (x, y) => { const xi = x < 0 ? 0 : x >= cols ? cols - 1 : x | 0, yi = y < 0 ? 0 : y >= rows ? rows - 1 : y | 0; return g[yi * cols + xi]; };
   for (let it = 0; it < iters; it++) {
-    const targets = new Array(M);
+    let cxC = 0, cyC = 0; for (const p of pts) { cxC += p.x; cyC += p.y; } cxC /= M; cyC /= M;
+    const targets = new Array(M), norms = new Array(M);
     for (let i = 0; i < M; i++) {
       const pa = pts[(i - 1 + M) % M], p = pts[i], pb = pts[(i + 1) % M];
       const tx = pb.x - pa.x, ty = pb.y - pa.y, tl = Math.hypot(tx, ty) || 1;
-      const nx = -ty / tl, ny = tx / tl; // unit normal
-      let bT = 0, bG = -1;
-      for (let s = -search; s <= search; s++) {
-        const x = p.x + nx * s, y = p.y + ny * s;
-        const gg = Math.abs(gAt(x + nx, y + ny) - gAt(x - nx, y - ny));
-        if (gg > bG) { bG = gg; bT = s; }
+      let nx = -ty / tl, ny = tx / tl;
+      if ((p.x - cxC) * nx + (p.y - cyC) * ny < 0) { nx = -nx; ny = -ny; } // make normal point OUTWARD
+      norms[i] = { nx, ny };
+      let bT = null;
+      if (outer) {
+        // outermost strong edge: scan from the outside in, take the first hit →
+        // rides the thread/knurl PEAKS instead of diving into the valleys.
+        for (let s = search; s >= -search; s--) { const gg = Math.abs(gAt(p.x + nx * (s + 1), p.y + ny * (s + 1)) - gAt(p.x + nx * (s - 1), p.y + ny * (s - 1))); if (gg > gthr) { bT = s; break; } }
+      } else {
+        let bG = -1, bb = 0; for (let s = -search; s <= search; s++) { const gg = Math.abs(gAt(p.x + nx * (s + 1), p.y + ny * (s + 1)) - gAt(p.x + nx * (s - 1), p.y + ny * (s - 1))); if (gg > bG) { bG = gg; bb = s; } } if (bG > gthr) bT = bb;
       }
-      targets[i] = bG > gthr ? { x: p.x + nx * bT, y: p.y + ny * bT } : null;
+      targets[i] = bT != null ? { x: p.x + nx * bT, y: p.y + ny * bT } : null;
     }
     const np = new Array(M);
     for (let i = 0; i < M; i++) {
       const pa = pts[(i - 1 + M) % M], p = pts[i], pb = pts[(i + 1) % M];
       const sx = 0.25 * pa.x + 0.5 * p.x + 0.25 * pb.x, sy = 0.25 * pa.y + 0.5 * p.y + 0.25 * pb.y; // Laplacian smooth
       const t = targets[i];
-      np[i] = t ? { x: (1 - alpha) * sx + alpha * t.x, y: (1 - alpha) * sy + alpha * t.y } : { x: sx, y: sy };
+      if (t) np[i] = { x: (1 - alpha) * sx + alpha * t.x, y: (1 - alpha) * sy + alpha * t.y };
+      else { const { nx, ny } = norms[i]; np[i] = { x: sx + balloon * nx, y: sy + balloon * ny }; } // bridge gap outward
     }
     pts = np;
   }
+  // Boundary support: fraction of points on a strong edge (real tool ≈ high).
+  let supported = 0;
+  for (let i = 0; i < M; i++) {
+    const pa = pts[(i - 1 + M) % M], p = pts[i], pb = pts[(i + 1) % M];
+    const tx = pb.x - pa.x, ty = pb.y - pa.y, tl = Math.hypot(tx, ty) || 1;
+    const nx = -ty / tl, ny = tx / tl;
+    let bG = -1;
+    for (let s = -search; s <= search; s++) { const x = p.x + nx * s, y = p.y + ny * s; const gg = Math.abs(gAt(x + nx, y + ny) - gAt(x - nx, y - ny)); if (gg > bG) bG = gg; }
+    if (bG > gthr) supported++;
+  }
+  pts.support = supported / M;
   return pts;
+}
+
+// ── Principled finalizer pieces (no per-photo constants) ──────────────────────
+// LEARNED matting: seed FG=eroded core, BG=far outside, band=unknown; GrabCut
+// learns the tool's vs paper/shadow COLOUR MODELS from the seeds and decides the
+// band. Replaces fixed Lab darkness cutoffs → generalizes to metal-similar-to-
+// paper (the decision is relative to THIS tool's colour, not a magic threshold).
+// Trimap band is mm-grounded (~2mm) via pixelsPerMm, not a pixel guess.
+function grabcutMatte(cv, mask, src, ppm) {
+  const rows = src.rows, cols = src.cols;
+  const band = Math.max(3, Math.round(2.0 * ppm)); // ~2mm
+  const ker = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(band, band));
+  const core = new cv.Mat(), far = new cv.Mat();
+  cv.erode(mask, core, ker); cv.dilate(mask, far, ker);
+  const GC_BGD = 0, GC_FGD = 1, GC_PR_FGD = 3;
+  const gc = new cv.Mat(rows, cols, cv.CV_8UC1, new cv.Scalar(GC_BGD));
+  const cd = core.data, fd = far.data, gd = gc.data;
+  for (let i = 0; i < rows * cols; i++) gd[i] = cd[i] ? GC_FGD : (fd[i] ? GC_PR_FGD : GC_BGD);
+  const rgb = new cv.Mat(); cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB);
+  const bgd = new cv.Mat(), fgd = new cv.Mat();
+  let out;
+  try {
+    cv.grabCut(rgb, gc, new cv.Rect(0, 0, 1, 1), bgd, fgd, 3, cv.GC_INIT_WITH_MASK);
+    out = cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+    const od = out.data;
+    for (let i = 0; i < rows * cols; i++) od[i] = (gd[i] === GC_FGD || gd[i] === GC_PR_FGD) ? 255 : 0;
+  } catch (e) { out = mask.clone(); }
+  [core, far, ker, gc, rgb, bgd, fgd].forEach((m) => m.delete());
+  return out;
+}
+
+// ADAPTIVE edge threshold: the gradient cutoff is a low percentile of THIS image's
+// own boundary-gradient distribution — so it scales with the photo's contrast
+// (a faint steel tool and a high-contrast black tool each get a fair threshold).
+function adaptiveGthr(cv, mask, gray) {
+  const cs = new cv.MatVector(), h = new cv.Mat();
+  cv.findContours(mask, cs, h, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  let best = null, bestA = 0;
+  for (let i = 0; i < cs.size(); i++) { const c = cs.get(i); const a = cv.contourArea(c); if (a > bestA) { bestA = a; best = c; } }
+  if (!best) { cs.delete(); h.delete(); return 20; }
+  const d = best.data32S, n = best.rows, g = gray.data, cols = gray.cols, rows = gray.rows;
+  const gAt = (x, y) => { const xi = x < 0 ? 0 : x >= cols ? cols - 1 : x | 0, yi = y < 0 ? 0 : y >= rows ? rows - 1 : y | 0; return g[yi * cols + xi]; };
+  const vals = [];
+  for (let i = 0; i < n; i += 2) {
+    const pa = { x: d[((i - 1 + n) % n) * 2], y: d[((i - 1 + n) % n) * 2 + 1] }, p = { x: d[i * 2], y: d[i * 2 + 1] }, pb = { x: d[((i + 1) % n) * 2], y: d[((i + 1) % n) * 2 + 1] };
+    const tx = pb.x - pa.x, ty = pb.y - pa.y, tl = Math.hypot(tx, ty) || 1, nx = -ty / tl, ny = tx / tl;
+    vals.push(Math.abs(gAt(p.x + nx, p.y + ny) - gAt(p.x - nx, p.y - ny)));
+  }
+  cs.delete(); h.delete();
+  if (!vals.length) return 20;
+  vals.sort((a, b) => a - b);
+  return Math.max(6, vals[Math.floor(0.25 * vals.length)]); // 25th pct: most edge points pass, only weak/blur fall to balloon
 }
 
 function drawContours(cv, dst, binary, col, lw) {
@@ -364,6 +443,32 @@ function drawContours(cv, dst, binary, col, lw) {
           rawMask.delete(); cleaned.delete(); src.delete(); gray.delete(); continue;
         }
 
+        if (MODE === 'pfinal') {
+          // PRINCIPLED finalizer: GrabCut learned matting + adaptive gthr + mm-
+          // grounded snake. ZERO per-photo constants — everything derives from
+          // pixelsPerMm or this image's own gradient stats. RED rough · BLUE
+          // matted · GREEN final.
+          const c4 = res.grad;
+          const w2 = (dist(c4[0], c4[1]) + dist(c4[3], c4[2])) / 2, h2 = (dist(c4[0], c4[3]) + dist(c4[1], c4[2])) / 2;
+          const ppm = Math.max(w2, h2) / 297; // px per mm (A4 long side = 297mm)
+          const cues = buildToolMaskCues(cv, src, res.grad);
+          const rough = cleanMask(cv, cues.union);
+          cues.chroma.delete(); cues.dark.delete(); cues.varTight.delete(); cues.union.delete();
+          const matted = grabcutMatte(cv, rough, src, ppm);
+          const gthr = adaptiveGthr(cv, matted, gray);
+          const search = Math.max(3, Math.round(0.8 * ppm));     // ~0.8mm
+          const balloon = Math.max(0.3, Math.min(1.2, 0.12 * ppm)); // ~0.12mm
+          const snp = snakeRefine(cv, matted, gray, { gthr, search, balloon, outer: true });
+          const lw2 = Math.max(2, Math.round(width / 320));
+          drawContours(cv, src, rough, new cv.Scalar(255, 40, 40, 255), lw2);
+          drawContours(cv, src, matted, new cv.Scalar(60, 120, 255, 255), lw2);
+          for (let i = 0; i < snp.length; i++) { const a = snp[i], b = snp[(i + 1) % snp.length]; cv.line(src, new cv.Point(a.x, a.y), new cv.Point(b.x, b.y), new cv.Scalar(40, 230, 40, 255), lw2); }
+          console.log(`${f.padEnd(16)} ppm=${ppm.toFixed(2)} gthr=${gthr.toFixed(0)} search=${search}px(~0.8mm) balloon=${balloon.toFixed(1)} support=${(snp.support ?? 1).toFixed(2)}`);
+          const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
+          fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_pfinal.png`), PNG.sync.write(png));
+          rough.delete(); matted.delete(); src.delete(); gray.delete(); continue;
+        }
+
         if (MODE === 'finalize') {
           // Stage B prototype: rough mask (classical tool cues, jagged + some
           // shadow) -> shadow matting -> snake. RED = raw rough boundary ·
@@ -380,10 +485,68 @@ function drawContours(cv, dst, binary, col, lw) {
             const a = snakePts[i], b = snakePts[(i + 1) % snakePts.length];
             cv.line(src, new cv.Point(a.x, a.y), new cv.Point(b.x, b.y), new cv.Scalar(40, 230, 40, 255), lw2);
           }
-          console.log(`${f.padEnd(16)} rough=${cv.countNonZero(rough)} shadowFree=${cv.countNonZero(shadowFree)} snake=${snakePts.length}pts`);
+          console.log(`${f.padEnd(16)} rough=${cv.countNonZero(rough)} shadowFree=${cv.countNonZero(shadowFree)} snake=${snakePts.length}pts support=${(snakePts.support ?? 1).toFixed(2)}`);
           const png = new PNG({ width, height }); png.data = Buffer.from(src.data);
           fs.writeFileSync(join(OUT, `${basename(f, extname(f))}_finalize.png`), PNG.sync.write(png));
           rough.delete(); shadowFree.delete(); src.delete(); gray.delete(); continue;
+        }
+
+        if (MODE === 'score') {
+          // Phase 3 measurement: full offline detect (classical → Stage B shadow-
+          // matting + snake + boundary-support gate) → per-tool support; if a GT
+          // label exists (test-photos/labels/<name>.json = array of [[x,y],...]
+          // polygons), compute IoU + precision/recall (the ≤2%-FP metric).
+          const SUPPORT_GATE = 0.35;
+          const cues = buildToolMaskCues(cv, src, res.grad);
+          const shadowFree = removeShadow(cv, cues.union, src, res.grad, { keepAll: true });
+          cues.chroma.delete(); cues.dark.delete(); cues.varTight.delete(); cues.union.delete();
+          const minArea = Math.max(10000, width * height * 0.003);
+          const cs = new cv.MatVector(), hi = new cv.Mat();
+          cv.findContours(shadowFree, cs, hi, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+          const accepted = [], supports = []; let rejected = 0;
+          for (let ci = 0; ci < cs.size(); ci++) {
+            const c = cs.get(ci); const a = cv.contourArea(c);
+            if (a < minArea || a > width * height * 0.6) { c.delete(); continue; }
+            const tmp = cv.Mat.zeros(height, width, cv.CV_8UC1);
+            const v = new cv.MatVector(); v.push_back(c); cv.drawContours(tmp, v, 0, new cv.Scalar(255), -1); v.delete();
+            const snp = snakeRefine(cv, tmp, gray, {});
+            const support = snp.support ?? 1;
+            if (support >= SUPPORT_GATE) { accepted.push(tmp.clone()); supports.push(support); } else rejected++;
+            tmp.delete(); c.delete();
+          }
+          cs.delete(); hi.delete(); shadowFree.delete();
+          // Optional GT scoring.
+          const labelPath = join(IN, 'labels', `${basename(f, extname(f))}.json`);
+          let scoreStr = '';
+          if (fs.existsSync(labelPath)) {
+            const gtPolys = JSON.parse(fs.readFileSync(labelPath, 'utf8'));
+            const gtMasks = gtPolys.map((poly) => {
+              const m = cv.Mat.zeros(height, width, cv.CV_8UC1);
+              const pm = cv.matFromArray(poly.length, 1, cv.CV_32SC2, poly.flatMap((p) => [Math.round(p[0]), Math.round(p[1])]));
+              const v = new cv.MatVector(); v.push_back(pm); cv.fillPoly(m, v, new cv.Scalar(255)); v.delete(); pm.delete();
+              return m;
+            });
+            let tp = 0, sumIoU = 0; const usedGt = new Set();
+            for (const det of accepted) {
+              let bIoU = 0, bj = -1;
+              for (let j = 0; j < gtMasks.length; j++) {
+                if (usedGt.has(j)) continue;
+                const inter = new cv.Mat(), uni = new cv.Mat();
+                cv.bitwise_and(det, gtMasks[j], inter); cv.bitwise_or(det, gtMasks[j], uni);
+                const iou = cv.countNonZero(inter) / Math.max(1, cv.countNonZero(uni));
+                inter.delete(); uni.delete();
+                if (iou > bIoU) { bIoU = iou; bj = j; }
+              }
+              if (bIoU > 0.5) { tp++; sumIoU += bIoU; usedGt.add(bj); }
+            }
+            const fp = accepted.length - tp, fn = gtMasks.length - tp;
+            const prec = (tp + fp) ? tp / (tp + fp) : 1, rec = (tp + fn) ? tp / (tp + fn) : 1;
+            scoreStr = ` | GT=${gtMasks.length} TP=${tp} FP=${fp} FN=${fn} prec=${prec.toFixed(2)} rec=${rec.toFixed(2)} mIoU=${(tp ? sumIoU / tp : 0).toFixed(3)}`;
+            gtMasks.forEach((m) => m.delete());
+          }
+          console.log(`${f.padEnd(16)} tools=${accepted.length} reject=${rejected} support=[${supports.map((s) => s.toFixed(2)).join(',')}]${scoreStr}`);
+          accepted.forEach((m) => m.delete());
+          src.delete(); gray.delete(); continue;
         }
 
         if (MODE === 'tools') {
