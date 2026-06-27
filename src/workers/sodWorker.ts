@@ -36,25 +36,50 @@ ort.env.wasm.numThreads = Math.min((self.navigator?.hardwareConcurrency || 4), 8
 // path that also has .partN files).
 // Only honour a real path ('/…') or URL ('http…') — a malformed value (e.g. a
 // stray "20" from a mixed-up env var) falls back to the same-origin chunks.
+// Tracer selection — IS-Net (default) or BiRefNet Lite, which "handles
+// reflections and shiny surfaces well" (Tracefinity's model for chrome tools).
+// To test BiRefNet: set VITE_TRACER=birefnet and supply the ONNX at
+// /models/birefnet_lite.onnx (or VITE_BIREFNET_URL; chunk via VITE_BIREFNET_PARTS
+// for the Pages 25MB cap). Key difference: BiRefNet wants ImageNet normalisation,
+// IS-Net wants x/255−0.5. Output is min-max normalised for both (robust).
+type TracerCfg = { base: string; parts: number; size: number; norm: 'isnet' | 'imagenet'; label: string };
 const _modelUrl = import.meta.env.VITE_MODEL_URL as string | undefined;
-const MODEL_BASE = _modelUrl && /^(https?:|\/)/.test(_modelUrl) ? _modelUrl : '/models/isnet_q8.onnx';
-const MODEL_PARTS = 3;
-const SIZE = 1024;
+const _isnetBase = _modelUrl && /^(https?:|\/)/.test(_modelUrl) ? _modelUrl : '/models/isnet_q8.onnx';
+const _birefUrl = import.meta.env.VITE_BIREFNET_URL as string | undefined;
+const TRACERS: Record<string, TracerCfg> = {
+  isnet: { base: _isnetBase, parts: 3, size: 1024, norm: 'isnet', label: 'IS-Net q8' },
+  birefnet: {
+    base: _birefUrl && /^(https?:|\/)/.test(_birefUrl) ? _birefUrl : '/models/birefnet_lite.onnx',
+    parts: Number(import.meta.env.VITE_BIREFNET_PARTS) || 1,
+    size: 1024, norm: 'imagenet', label: 'BiRefNet Lite',
+  },
+};
+const TRACER = ((import.meta.env.VITE_TRACER as string) || 'isnet').toLowerCase();
+const M: TracerCfg = TRACERS[TRACER] || TRACERS.isnet;
+const SIZE = M.size;
 
-/** Fetch the model's .partN chunks (parallel) and concatenate into one buffer. */
+/** Fetch the model — single file, or .partN chunks (parallel) concatenated. */
 async function loadModelBuffer(): Promise<Uint8Array> {
+  const validate = (buf: ArrayBuffer, where: string) => {
+    const firstByte = new Uint8Array(buf.slice(0, 1))[0];
+    if (firstByte === 0x3c /* '<' */ || buf.byteLength < 1_000_000) {
+      throw new Error(`${M.label} not served at ${where} (${buf.byteLength} bytes, looks like HTML/missing). Is the model file present?`);
+    }
+  };
+  if (M.parts <= 1) {
+    const r = await fetch(M.base);
+    if (!r.ok) throw new Error(`${M.label}: HTTP ${r.status} @ ${M.base}`);
+    const buf = await r.arrayBuffer();
+    validate(buf, M.base);
+    return new Uint8Array(buf);
+  }
   const buffers = await Promise.all(
-    Array.from({ length: MODEL_PARTS }, async (_, i) => {
-      const url = `${MODEL_BASE}.part${i}`;
+    Array.from({ length: M.parts }, async (_, i) => {
+      const url = `${M.base}.part${i}`;
       const r = await fetch(url);
-      if (!r.ok) throw new Error(`SOD model part ${i}: HTTP ${r.status} @ ${url}`);
+      if (!r.ok) throw new Error(`${M.label} part ${i}: HTTP ${r.status} @ ${url}`);
       const buf = await r.arrayBuffer();
-      // If the host's SPA fallback served index.html (part missing / old deploy),
-      // it's not a model chunk — fail clearly so the caller drops to classical.
-      const firstByte = new Uint8Array(buf.slice(0, 1))[0];
-      if (firstByte === 0x3c /* '<' */ || buf.byteLength < 1_000_000) {
-        throw new Error(`SOD model part ${i} is not a valid chunk (${buf.byteLength} bytes) — the .part files aren't being served at ${url}. Are you on the latest Pages deploy?`);
-      }
+      validate(buf, url);
       return buf;
     }),
   );
@@ -98,7 +123,7 @@ async function initSession(id: string): Promise<void> {
   // crossOriginIsolated tells us whether SharedArrayBuffer (multi-thread) is live.
   const isolated = typeof self !== 'undefined' && (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated;
   device = isolated && threads > 1 ? `wasm×${threads}` : 'wasm (1 thread)';
-  console.log(`%c🧠 SOD MODEL LOADED: IS-Net q8 (${device})`, 'color:#22c55e;font-weight:bold');
+  console.log(`%c🧠 SOD MODEL LOADED: ${M.label} (${device})`, 'color:#22c55e;font-weight:bold');
   post({ id, type: 'progress', payload: { status: 'model_loaded', device } });
 }
 
@@ -111,13 +136,22 @@ async function segment(rgba: Uint8ClampedArray, width: number, height: number) {
   dctx.drawImage(src, 0, 0, SIZE, SIZE);
   const resized = dctx.getImageData(0, 0, SIZE, SIZE).data;
 
-  // 2. CHW float32, IS-Net normalisation: x/255 − 0.5.
+  // 2. CHW float32. IS-Net: x/255 − 0.5. BiRefNet: ImageNet mean/std.
   const plane = SIZE * SIZE;
   const input = new Float32Array(3 * plane);
-  for (let i = 0; i < plane; i++) {
-    input[i]             = resized[i * 4]     / 255 - 0.5;
-    input[plane + i]     = resized[i * 4 + 1] / 255 - 0.5;
-    input[2 * plane + i] = resized[i * 4 + 2] / 255 - 0.5;
+  if (M.norm === 'imagenet') {
+    const mean = [0.485, 0.456, 0.406], std = [0.229, 0.224, 0.225];
+    for (let i = 0; i < plane; i++) {
+      input[i]             = (resized[i * 4]     / 255 - mean[0]) / std[0];
+      input[plane + i]     = (resized[i * 4 + 1] / 255 - mean[1]) / std[1];
+      input[2 * plane + i] = (resized[i * 4 + 2] / 255 - mean[2]) / std[2];
+    }
+  } else {
+    for (let i = 0; i < plane; i++) {
+      input[i]             = resized[i * 4]     / 255 - 0.5;
+      input[plane + i]     = resized[i * 4 + 1] / 255 - 0.5;
+      input[2 * plane + i] = resized[i * 4 + 2] / 255 - 0.5;
+    }
   }
   const tensor = new ort.Tensor('float32', input, [1, 3, SIZE, SIZE]);
 

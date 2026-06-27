@@ -84,6 +84,32 @@ export async function sodPreload(onProgress?: (p: SodProgress) => void): Promise
   await request('load', {}, [], onProgress);
 }
 
+// ── DEBUG: dump the real SOD mask + crop, so the shadow/jaggy finalizer can be
+// developed against ACTUAL masks in the offline harness instead of guessing.
+// Enable in the browser console: window.__DUMP_SOD = true; then run detect.
+function downloadPng(name: string, rgba: Uint8ClampedArray, w: number, h: number): void {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.putImageData(new ImageData(rgba, w, h), 0, 0);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+  } catch (e) { console.warn('[DUMP] failed', e); }
+}
+function maskToRgba(mask: Uint8Array, w: number, h: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) { const v = mask[i]; out[i * 4] = v; out[i * 4 + 1] = v; out[i * 4 + 2] = v; out[i * 4 + 3] = 255; }
+  return out;
+}
+
 /**
  * Autonomous detection via the trained SOD model. detectPaper must have run so
  * we can crop to the sheet. Returns one ToolTracingResult per tool in
@@ -109,6 +135,18 @@ export async function sodDetect(
   // intact full image to hand traceMask the SAME pixels the mask was computed on
   // — it GrabCut-refines the mask boundary to the real tool edges before tracing.
   const refine = cropToPaper(img, paperCorners);
+
+  // DEBUG dump (before traceMask transfers these buffers): real crop + SOD mask.
+  if (typeof window !== 'undefined' && (window as { __DUMP_SOD?: boolean }).__DUMP_SOD) {
+    const ts = Date.now();
+    downloadPng(`sod_${ts}_crop.png`, new Uint8ClampedArray(refine.crop), refine.cw, refine.ch);
+    const mU8 = new Uint8Array(seg.mask);
+    if (mU8.length === seg.width * seg.height) {
+      downloadPng(`sod_${ts}_mask.png`, maskToRgba(mU8, seg.width, seg.height), seg.width, seg.height);
+    }
+    console.log(`[DUMP] SOD crop ${refine.cw}x${refine.ch} + mask ${seg.width}x${seg.height} → check downloads`);
+  }
+
   const results = await traceMask(seg.mask, seg.width, seg.height, refine.crop.buffer);
 
   // Map crop coords → full-image coords.
