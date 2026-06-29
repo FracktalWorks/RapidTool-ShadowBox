@@ -368,6 +368,44 @@ function grabcutMatte(cv, mask, src, ppm) {
   return out;
 }
 
+// GrabCut GROW: recover a missing chrome region (e.g. a hammer shaft the SOD
+// model dropped). FG seed = eroded mask core; UNKNOWN = the convex hull of the
+// mask (so the shaft gap becomes "let GrabCut decide"); BG = outside the hull.
+// If the grey metal is separable from white paper by colour, GrabCut grows in.
+function grabcutGrow(cv, mask, src, ppm) {
+  const rows = src.rows, cols = src.cols, T = [];
+  const band = Math.max(3, Math.round(1.5 * ppm));
+  const ker = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(band, band)); T.push(ker);
+  const core = new cv.Mat(); cv.erode(mask, core, ker); T.push(core);
+  const cs = new cv.MatVector(), hi = new cv.Mat(); cv.findContours(mask, cs, hi, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  const allPts = [];
+  for (let i = 0; i < cs.size(); i++) { const c = cs.get(i); for (let j = 0; j < c.rows; j++) allPts.push(c.data32S[j * 2], c.data32S[j * 2 + 1]); c.delete(); }
+  cs.delete(); hi.delete();
+  const hullMask = cv.Mat.zeros(rows, cols, cv.CV_8UC1); T.push(hullMask);
+  if (allPts.length >= 6) {
+    const pm = cv.matFromArray(allPts.length / 2, 1, cv.CV_32SC2, allPts);
+    const hull = new cv.Mat(); cv.convexHull(pm, hull, false, true);
+    const hv = new cv.MatVector(); hv.push_back(hull);
+    cv.fillPoly(hullMask, hv, new cv.Scalar(255));
+    pm.delete(); hull.delete(); hv.delete();
+  }
+  const hullDil = new cv.Mat(); cv.dilate(hullMask, hullDil, ker); T.push(hullDil);
+  const GC_BGD = 0, GC_FGD = 1, GC_PR_FGD = 3;
+  const gc = new cv.Mat(rows, cols, cv.CV_8UC1, new cv.Scalar(GC_BGD)); T.push(gc);
+  const cd = core.data, hd = hullDil.data, gd = gc.data;
+  for (let i = 0; i < rows * cols; i++) gd[i] = cd[i] ? GC_FGD : (hd[i] ? GC_PR_FGD : GC_BGD);
+  const rgb = new cv.Mat(); cv.cvtColor(src, rgb, cv.COLOR_RGBA2RGB); T.push(rgb);
+  const bgd = new cv.Mat(), fgd = new cv.Mat(); T.push(bgd, fgd);
+  let out;
+  try {
+    cv.grabCut(rgb, gc, new cv.Rect(0, 0, 1, 1), bgd, fgd, 5, cv.GC_INIT_WITH_MASK);
+    out = cv.Mat.zeros(rows, cols, cv.CV_8UC1);
+    for (let i = 0; i < rows * cols; i++) out.data[i] = (gd[i] === GC_FGD || gd[i] === GC_PR_FGD) ? 255 : 0;
+  } catch (e) { console.log('grabcutGrow err:', e.message || e); out = mask.clone(); }
+  T.forEach((m) => m.delete());
+  return cleanMask(cv, out);
+}
+
 // ADAPTIVE edge threshold: the gradient cutoff is a low percentile of THIS image's
 // own boundary-gradient distribution — so it scales with the photo's contrast
 // (a faint steel tool and a high-contrast black tool each get a fair threshold).
@@ -417,6 +455,52 @@ function drawContours(cv, dst, binary, col, lw) {
     const cv = globalThis.cv || globalThis.Module;
     try { fs.rmSync(cjs); } catch {}
     console.log(`KNOBS ${JSON.stringify(KNOBS)}\n`);
+
+    // ── realfinal: develop the finalizer against REAL dumped (crop, SOD-mask) ──
+    // Pairs in test-photos/sod-samples/<name>_crop.png + <name>_mask.png.
+    // Pipeline: chrome-shaft RECOVERY (classical variance/edge catches metal the
+    // SOD model missed) → GrabCut shadow matte → mm-grounded smooth snake.
+    if (MODE === 'realfinal') {
+      const sdir = join(IN, 'sod-samples');
+      const maskFiles = fs.existsSync(sdir) ? fs.readdirSync(sdir).filter((f) => /_mask\.png$/.test(f)) : [];
+      for (const mf of maskFiles) {
+        const name = mf.replace('_mask.png', '');
+        const cropF = join(sdir, name + '_crop.png');
+        if (!fs.existsSync(cropF)) continue;
+        const mp = PNG.sync.read(fs.readFileSync(join(sdir, mf)));
+        const cp = PNG.sync.read(fs.readFileSync(cropF));
+        if (mp.width !== cp.width || mp.height !== cp.height) { console.log(`${name}: size mismatch ${mp.width}x${mp.height} vs ${cp.width}x${cp.height}`); continue; }
+        const w = mp.width, h = mp.height;
+        const sodMask = new cv.Mat(h, w, cv.CV_8UC1);
+        for (let i = 0; i < w * h; i++) sodMask.data[i] = mp.data[i * 4] > 127 ? 255 : 0;
+        const src = new cv.Mat(h, w, cv.CV_8UC4); src.data.set(cp.data);
+        const gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+        const ppm = Math.max(w, h) / 297;
+        const fullQuad = [{ x: 0, y: 0 }, { x: w - 1, y: 0 }, { x: w - 1, y: h - 1 }, { x: 0, y: h - 1 }];
+
+        // 1) chrome-shaft RECOVERY via GrabCut GROW (convex-hull unknown region):
+        //    grows FG into the grey shaft if it's separable from white paper.
+        const reconn = grabcutGrow(cv, sodMask, src, ppm);
+
+        // 2) (matte temporarily skipped — grabcutMatte collapses on metal-on-
+        //    white; isolating recovery+smooth first) 3) smooth snake on reconn
+        const gthr = adaptiveGthr(cv, reconn, gray);
+        const search = Math.max(3, Math.round(0.8 * ppm)), balloon = Math.max(0.3, Math.min(1.2, 0.12 * ppm));
+        const snp = snakeRefine(cv, reconn, gray, { gthr, search, balloon, outer: true });
+
+        const lw = Math.max(2, Math.round(w / 350));
+        drawContours(cv, src, sodMask, new cv.Scalar(255, 40, 40, 255), lw);   // RED  = raw SOD mask
+        drawContours(cv, src, reconn, new cv.Scalar(60, 120, 255, 255), lw);   // BLUE = after chrome recovery
+        for (let i = 0; i < snp.length; i++) { const a = snp[i], b = snp[(i + 1) % snp.length]; cv.line(src, new cv.Point(a.x, a.y), new cv.Point(b.x, b.y), new cv.Scalar(40, 230, 40, 255), lw); } // GREEN = final
+        console.log(`${name.padEnd(18)} ${w}x${h} ppm=${ppm.toFixed(2)} sod=${cv.countNonZero(sodMask)} recovered=${cv.countNonZero(reconn)} support=${(snp.support ?? 1).toFixed(2)}`);
+        const png = new PNG({ width: w, height: h }); png.data = Buffer.from(src.data);
+        fs.writeFileSync(join(OUT, `${name}_realfinal.png`), PNG.sync.write(png));
+        sodMask.delete(); reconn.delete(); gray.delete(); src.delete();
+      }
+      console.log(`\nDone -> ${OUT}`);
+      process.exit(0);
+    }
+
     for (const im of imgs) {
       try {
         const { f, data, width, height } = im;

@@ -989,7 +989,7 @@ function extractContourPoints(
 // Shared core: a solid binary mask (CV_8U, 0/255) → one gated TraceResult per
 // connected tool. Used by BOTH the classical path (buildToolMask) and the SOD
 // path (trained-model mask). Mutates `mask` (hole-fill). Caller frees `mask`.
-function tracePreparedMask(mask: any, rows: number, cols: number, trusted = false, finalizeImage?: ImageData): TraceResult[] {
+function tracePreparedMask(mask: any, rows: number, cols: number, trusted = false, finalizeImage?: ImageData, highQuality = false): TraceResult[] {
   const totalArea = rows * cols;
   const maskPx = cv.countNonZero(mask);
   console.log(`tracePreparedMask: input mask=${maskPx}px (${(100 * maskPx / totalArea).toFixed(1)}% of frame)${trusted ? ' [SOD/trusted]' : ' [classical]'}${finalizeImage ? ' [snake]' : ''}`);
@@ -1033,10 +1033,12 @@ function tracePreparedMask(mask: any, rows: number, cols: number, trusted = fals
   const hierarchy = new cv.Mat();
   cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
 
-  // Floor raised to reject shadow/pencil-mark blobs. Measured: false positives
-  // top out ~7.5k px while the smallest real tool is ~30k, so 10k cleanly cuts the
-  // noise without dropping genuine tools. Scales up for large images.
-  const minArea = Math.max(10000, totalArea * 0.003);
+  // Floor rejects shadow/pencil-mark blobs. Measured: false positives top out
+  // ~7.5k px, so 10k cleanly cuts the noise on the IS-Net/classical path. But a
+  // high-quality BiRefNet mask carries NO shadow/pencil noise — its blobs are real
+  // salient objects — so small tools (a AA battery ~9k px, a screw, an Allen key)
+  // must not be dropped. Halve the floor for that trusted-clean path.
+  const minArea = highQuality ? Math.max(4000, totalArea * 0.0015) : Math.max(10000, totalArea * 0.003);
   const results: TraceResult[] = [];
 
   // Aspect ceiling: the classical path must reject paper folds / scratches /
@@ -1328,10 +1330,34 @@ function snakeRefineContour(contour: any, gray: any, knobs?: any): Point2D[] {
   return pts;
 }
 
-function traceMask(maskData: Uint8Array, width: number, height: number, imageData?: ImageData): TraceResult[] {
+function traceMask(maskData: Uint8Array, width: number, height: number, imageData?: ImageData, highQuality = false): TraceResult[] {
   const raw = new cv.Mat(height, width, cv.CV_8UC1);
   raw.data.set(maskData);
-  console.log(`traceMask: raw SOD mask=${cv.countNonZero(raw)}px`);
+  console.log(`traceMask: raw SOD mask=${cv.countNonZero(raw)}px${highQuality ? ' [high-quality → direct trace]' : ''}`);
+
+  // A high-quality model mask (backend BiRefNet) is already tight, edge-accurate
+  // and shadow-free. The GrabCut edge-refine + active-contour snake below are
+  // crutches for the soft/serrated IS-Net masks — on a clean mask they only LOOSEN
+  // it: the snake's ±9px normal search snaps to a nearby shadow edge (ballooning a
+  // translucent tool into its cast shadow) and its Laplacian term puffs the curve.
+  // So trace the mask directly (gentle close + tight RDP), exactly as Tracefinity
+  // does with its model masks. The image is no longer needed.
+  if (highQuality) {
+    // Anti-alias the mask boundary: the soft BiRefNet map hard-thresholded at the
+    // upscaled crop scale leaves ~1-2px stair-steps that RDP then traces literally,
+    // serrating straight edges (L-square, vernier scale). A light Gaussian + re-
+    // threshold averages those steps into clean lines/curves. It's symmetric, so it
+    // doesn't move the true edge or balloon — and the kernel scales with resolution
+    // so corners (the L-square's 90°) survive.
+    const sk = (Math.max(3, Math.round(Math.min(height, width) * 0.004)) | 1);
+    cv.GaussianBlur(raw, raw, new cv.Size(sk, sk), 0);
+    cv.threshold(raw, raw, 127, 255, cv.THRESH_BINARY);
+    const results = tracePreparedMask(raw, height, width, true, undefined, true);
+    raw.delete();
+    console.log(`traceMask: found ${results.length} tools (direct trace, smooth k=${sk})`);
+    return results;
+  }
+
   let mask = imageData ? refineMaskToEdges(raw, imageData) : raw.clone();
   if (imageData) {
     console.log(`traceMask: after edge-refine=${cv.countNonZero(mask)}px`);
@@ -2211,7 +2237,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
         const refineImg = payload.rgba
           ? new ImageData(new Uint8ClampedArray(payload.rgba), payload.width, payload.height)
           : undefined;
-        result = traceMask(new Uint8Array(payload.mask), payload.width, payload.height, refineImg);
+        result = traceMask(new Uint8Array(payload.mask), payload.width, payload.height, refineImg, payload.highQuality);
         break;
       }
       default:
