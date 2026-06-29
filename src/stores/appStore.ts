@@ -204,7 +204,7 @@ const initialState = {
   toolOutlines: [],
   selectedOutlineId: null,
   refineHistory: {} as Record<string, ToolOutline[]>,
-  clearanceValue: 0.5,
+  clearanceValue: 1.0, // default Offset preset = Medium (step 3: None 0 / Small 0.5 / Medium 1 / Large 2)
   activeTool: 'box' as const,
   refineBrush: 12,
   exportFormat: 'stl' as const,

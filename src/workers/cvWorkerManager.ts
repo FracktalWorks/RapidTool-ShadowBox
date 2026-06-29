@@ -234,9 +234,10 @@ export async function traceMask(
   width: number,
   height: number,
   rgba?: ArrayBuffer,
+  highQuality = false,
 ): Promise<ToolTracingResult[]> {
   const transfer = rgba ? [mask, rgba] : [mask];
-  return request<ToolTracingResult[]>('traceMask', { mask, width, height, rgba }, transfer);
+  return request<ToolTracingResult[]>('traceMask', { mask, width, height, rgba, highQuality }, transfer);
 }
 
 /**

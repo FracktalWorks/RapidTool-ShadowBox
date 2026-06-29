@@ -21,6 +21,7 @@ export {
 export {
   samSegmentPoint,
   samAutoSegment,
+  samAutoSegmentDense,
   samPreload,
   samClear,
   samEverLoaded,

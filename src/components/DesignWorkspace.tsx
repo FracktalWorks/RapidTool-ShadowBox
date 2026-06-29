@@ -83,12 +83,25 @@ function createSolidShape(
     const scaleX = shape.width / (bboxWidth / pixelsPerMm);
     const scaleY = shape.height / (bboxHeight / pixelsPerMm);
 
+    // A degenerate outline (zero-size bbox, or a non-finite scale) makes the mapped
+    // points Infinity/NaN — the CSG then silently subtracts NOTHING and the whole
+    // floor renders FLAT (no pockets). Fail loudly instead of dark.
+    if (bboxWidth <= 0 || bboxHeight <= 0 || !Number.isFinite(scaleX) || !Number.isFinite(scaleY)) {
+      console.warn(`createSolidShape: degenerate tool "${shape.toolOutlineId}" (bbox ${bboxWidth.toFixed(1)}×${bboxHeight.toFixed(1)}px, ppm ${pixelsPerMm}) — pocket skipped`);
+      return null;
+    }
+
     const points = displayPoints.map((p) => ({
       x: centerX + ((p.x - boundingBox.minX) / pixelsPerMm) * scaleX - shape.width / 2,
       y: centerY - ((p.y - boundingBox.minY) / pixelsPerMm) * scaleY + shape.height / 2,
     }));
 
     if (points.length < 3) return null;
+    // Guard non-finite points (e.g. a bad arc-fit upstream) for the same reason.
+    if (points.some((p) => !Number.isFinite(p.x) || !Number.isFinite(p.y))) {
+      console.warn(`createSolidShape: non-finite points for "${shape.toolOutlineId}" — pocket skipped`);
+      return null;
+    }
 
     // We want COUNTER-CLOCKWISE for solid shapes in Three.js
     let signedArea = 0;
@@ -552,6 +565,21 @@ const ToolHolderMesh: React.FC<ToolHolderMeshProps> = ({
       }),
     };
   }, [settings.materialPreset]);
+
+  // Dispose GPU resources when a memoized geometry/material is replaced or the mesh
+  // unmounts. R3F does NOT auto-dispose geometries/materials passed as props when the
+  // prop changes — without this, every settings/layout tweak leaks a GPU buffer until
+  // the driver drops the WebGL context ("Context Lost" → the model goes flat/blank).
+  // Each cleanup closes over the PREVIOUS value, so the old resource is freed on change.
+  useEffect(() => () => { basePlateGeometry.dispose(); }, [basePlateGeometry]);
+  useEffect(() => () => { wallsGeometry.dispose(); }, [wallsGeometry]);
+  useEffect(() => () => { pocketFloorGeometry?.dispose(); }, [pocketFloorGeometry]);
+  useEffect(() => () => { gridfinityGeometry?.dispose(); }, [gridfinityGeometry]);
+  useEffect(() => () => { feetGeometry?.dispose(); }, [feetGeometry]);
+  useEffect(() => () => { lipGeometry?.dispose(); }, [lipGeometry]);
+  useEffect(() => () => {
+    holderMaterial.dispose(); basePlateMaterial.dispose(); gridfinityMaterial.dispose();
+  }, [holderMaterial, basePlateMaterial, gridfinityMaterial]);
 
   // Rest the whole assembly ON the bed: the Gridfinity feet hang below z=0, so
   // after rotation they'd dip under the grid. Lift the group by its lowest point

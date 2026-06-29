@@ -14,6 +14,13 @@
 
 import * as THREE from 'three';
 import Module from 'manifold-3d';
+// Vite emits manifold.wasm as a HASHED asset (manifold-<hash>.wasm). Without a
+// locateFile, Emscripten fetches it by its original name → 404 → the SPA returns
+// index.html → WASM compile fails ("magic word … found 3c 21 64 6f" = "<!do"),
+// and the watertight-STL repair silently falls back to a raw mesh. Resolving the
+// real asset URL via Vite's ?url and handing it to locateFile fixes the load.
+// @ts-ignore — Vite ?url asset import (resolved at bundle time)
+import manifoldWasmUrl from 'manifold-3d/manifold.wasm?url';
 import { decimateMesh as fallbackDecimateMesh, repairMesh as basicRepairMesh } from './meshAnalysis';
 
 // ============================================================================
@@ -86,7 +93,10 @@ async function getManifoldModule(): Promise<any> {
     return moduleInitPromise;
   }
   
-  moduleInitPromise = Module().then((wasm: any) => {
+  moduleInitPromise = Module({
+    // Point Emscripten at the Vite-resolved wasm URL (see import note above).
+    locateFile: (path: string) => (path.endsWith('.wasm') ? manifoldWasmUrl : path),
+  }).then((wasm: any) => {
     // Call setup() to initialize the module
     wasm.setup();
     manifoldModule = wasm;

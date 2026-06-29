@@ -27,7 +27,7 @@ if (env.backends?.onnx?.wasm) {
 
 const MODEL_ID = 'onnx-community/sam2.1-hiera-tiny-ONNX';
 
-interface WorkerMessage { id: string; type: 'load' | 'embed' | 'segmentPoint' | 'autoSegment' | 'clear'; payload: any }
+interface WorkerMessage { id: string; type: 'load' | 'embed' | 'segmentPoint' | 'autoSegment' | 'autoSegmentDense' | 'clear'; payload: any }
 interface WorkerResponse { id: string; type: 'success' | 'error' | 'progress'; payload: any }
 
 // Process at a capped resolution for speed + smaller masks; contours are scaled
@@ -538,6 +538,129 @@ async function autoSegment(
   return { masks: finalResults, scale: session.scaleToOriginal };
 }
 
+// Mask overlap (IoU + containment) — shared by both NMS passes.
+function maskOverlap(a: Uint8Array, b: Uint8Array): { iou: number; contA: number; contB: number } {
+  let inter = 0, areaA = 0, areaB = 0;
+  for (let i = 0; i < a.length; i++) {
+    const av = a[i] > 0, bv = b[i] > 0;
+    if (av) areaA++;
+    if (bv) areaB++;
+    if (av && bv) inter++;
+  }
+  const uni = areaA + areaB - inter;
+  return { iou: uni > 0 ? inter / uni : 0, contA: areaA > 0 ? inter / areaA : 0, contB: areaB > 0 ? inter / areaB : 0 };
+}
+
+// AMG-style DENSE automatic mask generation. Instead of relying on the classical
+// proposer (which goes blind to chrome-on-white), lay a dense grid of single-point
+// prompts over the paper, let SAM segment at each point, and keep the stable,
+// tool-sized, high-confidence masks (NMS-deduped). SAM's learned priors find the
+// metal-on-white edge that colour/variance heuristics and IS-Net SOD miss — this
+// is the "layer" the competitor appears to have. Heavier than the sparse path, so
+// it is an opt-in "Deep Detect". Two tricks keep it tractable in-browser:
+//   • structure gate — skip grid points on blank paper (low local gradient),
+//   • covered-skip   — once a tool is segmented, skip grid points inside it.
+async function autoSegmentDense(
+  id: string,
+  url: string,
+  paperCorners: any,
+  rgbaData?: Uint8Array | Uint8ClampedArray,
+  width?: number,
+  height?: number,
+  opts?: { gridDivisions?: number; scoreFloor?: number; maxDecodes?: number; gradFloor?: number },
+): Promise<{ masks: { mask: ArrayBuffer; width: number; height: number; score: number }[]; scale: number }> {
+  await embed(id, url, rgbaData, width, height);
+  if (!session || !rgbaData || !width || !height || !paperCorners) return { masks: [], scale: session?.scaleToOriginal ?? 1 };
+
+  const procW = session.image.width, procH = session.image.height;
+  const s2o = session.scaleToOriginal;
+  const origArea = (procW * s2o) * (procH * s2o);
+  const minArea = origArea * 0.0008;     // ignore specks
+  const maxArea = origArea * 0.30;       // ignore the sheet itself
+  const scoreFloor = opts?.scoreFloor ?? 0.62;
+  const gradFloor = opts?.gradFloor ?? 12;
+  const maxDecodes = opts?.maxDecodes ?? 160;
+  const divisions = opts?.gridDivisions ?? 22;
+
+  // Original-res grayscale + a cheap gradient probe for the structure gate.
+  const gray = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    gray[i] = (rgbaData[i * 4] * 0.299 + rgbaData[i * 4 + 1] * 0.587 + rgbaData[i * 4 + 2] * 0.114) | 0;
+  }
+  const gradAt = (x: number, y: number) => {
+    if (x < 1 || y < 1 || x >= width! - 1 || y >= height! - 1) return 0;
+    return Math.abs(gray[y * width! + x + 1] - gray[y * width! + x - 1]) +
+           Math.abs(gray[(y + 1) * width! + x] - gray[(y - 1) * width! + x]);
+  };
+
+  // Paper quad (original coords): bbox + point-in-polygon test.
+  const C = [paperCorners.topLeft, paperCorners.topRight, paperCorners.bottomRight, paperCorners.bottomLeft];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const c of C) { minX = Math.min(minX, c.x); minY = Math.min(minY, c.y); maxX = Math.max(maxX, c.x); maxY = Math.max(maxY, c.y); }
+  const inQuad = (x: number, y: number) => {
+    let inside = false;
+    for (let i = 0, j = 3; i < 4; j = i++) {
+      const xi = C[i].x, yi = C[i].y, xj = C[j].x, yj = C[j].y;
+      if (((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  };
+
+  const step = Math.max(20, Math.round(Math.min(maxX - minX, maxY - minY) / divisions));
+  const win = Math.max(4, Math.round(step * 0.4));
+  const covered = new Uint8Array(procW * procH);
+  const raw: { data: Uint8Array; score: number; area: number }[] = [];
+  let decodes = 0;
+
+  const rows = Math.ceil((maxY - minY) / step);
+  let rowIdx = 0;
+  for (let oy = minY + step / 2; oy < maxY && decodes < maxDecodes; oy += step, rowIdx++) {
+    post({ id, type: 'progress', payload: { status: 'segment', progress: Math.round((rowIdx / Math.max(1, rows)) * 100) } });
+    for (let ox = minX + step / 2; ox < maxX && decodes < maxDecodes; ox += step) {
+      if (!inQuad(ox, oy)) continue;
+      const px = Math.round(ox * session.procScale), py = Math.round(oy * session.procScale);
+      if (px < 0 || py < 0 || px >= procW || py >= procH) continue;
+      if (covered[py * procW + px]) continue;                 // already inside a found tool
+
+      // Structure gate: skip blank paper (low local gradient energy).
+      let g = 0, cnt = 0;
+      const cy = oy | 0, cx = ox | 0;
+      for (let yy = Math.max(0, cy - win); yy <= Math.min(height - 1, cy + win); yy += 3)
+        for (let xx = Math.max(0, cx - win); xx <= Math.min(width - 1, cx + win); xx += 3) { g += gradAt(xx, yy); cnt++; }
+      if (cnt === 0 || g / cnt < gradFloor) continue;
+
+      decodes++;
+      const r = await decodeAt([[px, py]], [1], paperCorners);
+      if (!r || r.score < scoreFloor) continue;
+      let area = 0;
+      for (let i = 0; i < r.data.length; i++) if (r.data[i]) area++;
+      const aOrig = area * s2o * s2o;
+      if (aOrig < minArea || aOrig > maxArea) continue;
+
+      raw.push({ data: r.data, score: r.score, area });
+      for (let i = 0; i < r.data.length; i++) if (r.data[i]) covered[i] = 1; // skip this tool's interior next
+    }
+  }
+
+  // NMS — keep highest score, suppress overlapping/contained duplicates.
+  raw.sort((a, b) => b.score - a.score);
+  const kept: typeof raw = [];
+  for (const cand of raw) {
+    let drop = false;
+    for (const k of kept) {
+      const { iou, contA, contB } = maskOverlap(k.data, cand.data);
+      if (iou > 0.5 || contA > 0.75 || contB > 0.75) { drop = true; break; }
+    }
+    if (!drop) kept.push(cand);
+  }
+
+  console.log(`[SAM] dense AMG: ${decodes} decodes -> ${raw.length} masks -> ${kept.length} after NMS`);
+  return {
+    masks: kept.map((k) => ({ mask: k.data.buffer as ArrayBuffer, width: procW, height: procH, score: k.score })),
+    scale: s2o,
+  };
+}
+
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
   const { id, type, payload } = e.data;
   try {
@@ -560,6 +683,11 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
       }
       case 'autoSegment': {
         const r = await autoSegment(id, payload.url, payload.proposals, payload.paperCorners, payload.rgbaData, payload.width, payload.height);
+        post({ id, type: 'success', payload: r }, r.masks.map((m) => m.mask));
+        return;
+      }
+      case 'autoSegmentDense': {
+        const r = await autoSegmentDense(id, payload.url, payload.paperCorners, payload.rgbaData, payload.width, payload.height, payload.opts);
         post({ id, type: 'success', payload: r }, r.masks.map((m) => m.mask));
         return;
       }

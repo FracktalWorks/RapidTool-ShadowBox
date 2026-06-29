@@ -31,3 +31,6 @@ scratch/
 
 # TS build artifacts
 *.tsbuildinfo
+
+# BiRefNet model (224MB) — fetch via public/models/BIREFNET.md, do not commit
+public/models/birefnet_lite.onnx

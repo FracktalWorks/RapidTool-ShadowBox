@@ -601,6 +601,49 @@ const ToolsStepPanel: React.FC = () => {
     }
   }, [imageUrl, isAiDetecting, pixelsPerMm, setToolOutlines, paperCorners, runAutoDetect]);
 
+  // DEEP detection (AMG-style): SAM lays a dense grid of prompts over the paper
+  // and segments at each, catching chrome-on-white that SOD/classical miss. Slower
+  // (opt-in). No classical fallback — it either finds tools or reports none.
+  const runDeepDetect = useCallback(async () => {
+    if (!imageUrl || isAiDetecting) return;
+    setIsAiDetecting(true);
+    setAiProgress(0);
+    try {
+      const { samAutoSegmentDense } = await import('../workers');
+      const { smoothContour, getBoundingBox } = await import('../lib/geometry');
+
+      const results = await samAutoSegmentDense(imageUrl, paperCorners, (p) => setAiProgress(Math.round(p.progress)));
+
+      if (results && results.length > 0) {
+        const TOOL_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
+        const newOutlines = results.map((result, index) => {
+          const smoothed = smoothContour(result.points, 1.5, 0);
+          return {
+            id: `deep-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 9)}`,
+            points: result.points,
+            smoothedPoints: smoothed,
+            boundingBox: getBoundingBox(smoothed),
+            area: result.area,
+            areaInMm2: pixelsPerMm ? result.area / (pixelsPerMm * pixelsPerMm) : undefined,
+            color: TOOL_COLORS[index % TOOL_COLORS.length],
+            name: `Tool ${index + 1}`,
+            confidence: result.confidence,
+          };
+        });
+        setToolOutlines(newOutlines);
+        setAutoDetectCount(results.length);
+      } else {
+        setAutoDetectCount(0);
+      }
+      setAutoDetectDone(true);
+    } catch (error) {
+      console.error('Deep detect failed:', error);
+    } finally {
+      setIsAiDetecting(false);
+      setAiProgress(null);
+    }
+  }, [imageUrl, isAiDetecting, pixelsPerMm, setToolOutlines, paperCorners]);
+
   // SOD detection (IS-Net, trained model): produces a clean foreground mask that
   // solves chrome, shadows and tool separation at the mask level, then routes
   // through the same OpenCV gates + RDP edges as classical. Falls back to the
@@ -719,6 +762,24 @@ const ToolsStepPanel: React.FC = () => {
               Auto Detect Tools
             </>
           )}
+        </button>
+
+        {/* Deep Detect (dense AMG) — slower, recovers chrome/metal the fast pass misses */}
+        <button
+          onClick={runDeepDetect}
+          disabled={isAiDetecting || isDisabled || !paperCorners}
+          className="
+            w-full h-8 px-3
+            rounded-lg text-[11px] font-semibold transition-all
+            flex items-center justify-center gap-1.5
+            border border-[hsl(var(--primary)/0.5)] text-[hsl(var(--primary))]
+            hover:bg-[hsl(var(--primary)/0.08)]
+            disabled:opacity-50 disabled:cursor-not-allowed
+          "
+          title="Slower, thorough scan — densely probes the whole sheet with SAM to recover shiny/chrome tools the fast pass misses."
+        >
+          <Sparkles className="w-3 h-3" />
+          Deep Detect (thorough)
         </button>
 
         {/* Tracing Mode Selection */}
