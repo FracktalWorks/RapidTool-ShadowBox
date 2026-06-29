@@ -10,7 +10,6 @@ import {
   contourToSVGPath,
   offsetPolygon,
   simplifyPath,
-  chaikinSmoothing,
   type ToolOutline,
   type Point2D,
 } from '../lib/geometry';
@@ -55,6 +54,51 @@ function buildEditAnchors(points: Point2D[]): Point2D[] {
     }
   }
   return anchors;
+}
+
+// Nearest base-point index to an anchor (anchors may be interpolated points that
+// don't sit exactly on a base vertex).
+function nearestIdx(base: Point2D[], p: Point2D): number {
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < base.length; i++) {
+    const d = (base[i].x - p.x) ** 2 + (base[i].y - p.y) ** 2;
+    if (d < bd) { bd = d; bi = i; }
+  }
+  return bi;
+}
+
+// LOCAL deformation: move the dense contour points within `radiusPx` (arc-length)
+// of `centerIdx` by `delta`, with a cosine falloff (full at the centre → 0 at the
+// edge). Everything beyond the radius is left EXACTLY in place, so dragging an
+// anchor reshapes only its neighbourhood — the rest of the outline and all its
+// fine detail stay put (vs the old "rebuild the whole curve from sparse anchors").
+function deformContour(base: Point2D[], centerIdx: number, delta: Point2D, radiusPx: number): Point2D[] {
+  const N = base.length;
+  const cum = new Array<number>(N);
+  cum[0] = 0;
+  for (let i = 1; i < N; i++) cum[i] = cum[i - 1] + Math.hypot(base[i].x - base[i - 1].x, base[i].y - base[i - 1].y);
+  const total = cum[N - 1] + Math.hypot(base[0].x - base[N - 1].x, base[0].y - base[N - 1].y);
+  const c = cum[centerIdx];
+  return base.map((p, j) => {
+    let d = Math.abs(cum[j] - c);
+    d = Math.min(d, total - d); // shorter way around the closed loop
+    if (d >= radiusPx) return p;
+    const w = 0.5 * (1 + Math.cos((Math.PI * d) / radiusPx));
+    return { x: p.x + delta.x * w, y: p.y + delta.y * w };
+  });
+}
+
+// A per-outline edit entry: the dense editable contour (base) + sparse draggable
+// anchors, each mapped to its base index, plus the drag influence radius.
+type EditEntry = { base: Point2D[]; anchors: Point2D[]; anchorIdx: number[]; radius: number };
+function makeEditEntry(displayPoints: Point2D[]): EditEntry {
+  const base = displayPoints.map((p) => ({ x: p.x, y: p.y }));
+  const anchors = buildEditAnchors(base);
+  const anchorIdx = anchors.map((a) => nearestIdx(base, a));
+  let perim = 0;
+  for (let i = 0; i < base.length; i++) { const q = base[(i + 1) % base.length]; perim += Math.hypot(q.x - base[i].x, q.y - base[i].y); }
+  const radius = Math.max(1, (perim / Math.max(1, anchors.length)) * 1.3);
+  return { base, anchors, anchorIdx, radius };
 }
 
 // ============================================================================
@@ -110,22 +154,22 @@ export const TracingOverlay: React.FC<TracingOverlayProps> = ({
   // State for point editing — a SPARSE control polygon (anchors) for the
   // selected outline. Dragging an anchor reshapes a smooth region of the curve.
   const [dragPoint, setDragPoint] = useState<{ id: string; index: number } | null>(null);
-  const [editAnchors, setEditAnchors] = useState<{ id: string; points: Point2D[] } | null>(null);
+  // Per-outline edit entries (dense base + draggable anchors). In edit mode EVERY
+  // outline is editable, so this is keyed by id rather than a single selection.
+  const [editState, setEditState] = useState<Record<string, EditEntry>>({});
 
-  // (Re)build anchors when entering edit mode or switching selected outline.
+  // In edit mode, make EVERY outline editable: build (or keep) an entry per outline.
+  // Existing entries are preserved across re-renders so an in-progress edit is never
+  // reset; entries for outlines that go away simply drop out.
   useEffect(() => {
-    if (currentTool !== 'edit' || !selectedId) {
-      if (editAnchors) setEditAnchors(null);
-      return;
-    }
-    if (editAnchors && editAnchors.id === selectedId) return; // already editing this one
-    const outline = outlines.find(o => o.id === selectedId);
-    if (outline) {
-      const displayPoints = outline.regularizedPoints ?? outline.smoothedPoints;
-      setEditAnchors({ id: selectedId, points: buildEditAnchors(displayPoints) });
-    }
+    if (currentTool !== 'edit') { setEditState({}); return; }
+    setEditState((prev) => {
+      const next: Record<string, EditEntry> = {};
+      for (const o of outlines) next[o.id] = prev[o.id] ?? makeEditEntry(o.regularizedPoints ?? o.smoothedPoints);
+      return next;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentTool, selectedId]);
+  }, [currentTool, outlines.length]);
 
   // Get image coordinates from mouse event
   const getImageCoords = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
@@ -159,21 +203,25 @@ export const TracingOverlay: React.FC<TracingOverlayProps> = ({
 
   // Handle mouse move for box selection or dragging
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
-    if (dragPoint && currentTool === 'edit' && onUpdateOutline && editAnchors) {
+    if (dragPoint && currentTool === 'edit' && onUpdateOutline) {
+      const entry = editState[dragPoint.id];
+      if (!entry) return;
       const { x, y } = getImageCoords(e);
-      const newAnchors = [...editAnchors.points];
-      newAnchors[dragPoint.index] = { x, y };
-      setEditAnchors({ id: editAnchors.id, points: newAnchors });
-      // Reshape a smooth region of the curve through the moved anchor.
-      const smoothed = chaikinSmoothing(newAnchors, 3, true);
-      onUpdateOutline(editAnchors.id, smoothed);
+      const k = dragPoint.index;
+      // Move the dense contour LOCALLY around the dragged anchor (cosine falloff);
+      // far points keep their exact position so the rest of the outline is untouched.
+      const delta = { x: x - entry.anchors[k].x, y: y - entry.anchors[k].y };
+      const newBase = deformContour(entry.base, entry.anchorIdx[k], delta, entry.radius);
+      const newAnchors = entry.anchors.map((a, m) => (m === k ? { x, y } : newBase[entry.anchorIdx[m]]));
+      setEditState((s) => ({ ...s, [dragPoint.id]: { ...entry, base: newBase, anchors: newAnchors } }));
+      onUpdateOutline(dragPoint.id, newBase);
       return;
     }
 
     if (!isDrawing || currentTool !== 'box' || !selectionRect) return;
     const { x, y } = getImageCoords(e);
     setSelectionRect(prev => prev ? { ...prev, endX: x, endY: y } : null);
-  }, [isDrawing, currentTool, selectionRect, getImageCoords, dragPoint, onUpdateOutline, outlines, editAnchors]);
+  }, [isDrawing, currentTool, selectionRect, getImageCoords, dragPoint, onUpdateOutline, editState]);
 
   // Handle mouse up for box selection or dragging
   const handleMouseUp = useCallback((_e: React.MouseEvent<SVGSVGElement>) => {
@@ -211,8 +259,10 @@ export const TracingOverlay: React.FC<TracingOverlayProps> = ({
   const handleOutlineClick = useCallback((e: React.MouseEvent, outlineId: string) => {
     e.stopPropagation();
     
-    if (currentTool === 'select') {
-      onSelect(selectedId === outlineId ? null : outlineId);
+    if (currentTool === 'select' || currentTool === 'edit') {
+      // In edit mode every outline is already editable; clicking just highlights
+      // it (shows its bounding box) without toggling its anchors off.
+      onSelect(currentTool === 'select' && selectedId === outlineId ? null : outlineId);
     } else if (currentTool === 'erase') {
       onDelete(outlineId);
     }
@@ -350,37 +400,7 @@ export const TracingOverlay: React.FC<TracingOverlayProps> = ({
                     strokeWidth={strokeWidth}
                   />
                 ))}
-                
-                {/* Sparse control-polygon editing: ~16-40 draggable anchors that
-                    drive a smooth curve. Dragging one reshapes a region. */}
-                {currentTool === 'edit' && editAnchors && editAnchors.id === outline.id && (
-                  <>
-                    {/* faint control polygon connecting the anchors */}
-                    <polygon
-                      points={editAnchors.points.map(p => `${p.x},${p.y}`).join(' ')}
-                      fill="none"
-                      stroke={outline.color}
-                      strokeWidth={strokeWidth}
-                      strokeDasharray={`${3 / zoom} ${3 / zoom}`}
-                      opacity={0.4}
-                      style={{ pointerEvents: 'none' }}
-                    />
-                    {editAnchors.points.map((point, i) => (
-                      <circle
-                        key={`anchor-${i}`}
-                        cx={point.x}
-                        cy={point.y}
-                        r={dragPoint?.index === i ? Math.max(5, 9 / zoom) : Math.max(4, 7 / zoom)}
-                        fill={dragPoint?.index === i ? outline.color : 'white'}
-                        stroke={outline.color}
-                        strokeWidth={strokeWidth * 1.5}
-                        style={{ cursor: 'grab' }}
-                        onMouseDown={(e) => handlePointMouseDown(e, outline.id, i)}
-                      />
-                    ))}
-                  </>
-                )}
-                
+
                 {/* Refinement prompt click dots */}
                 {(currentTool === 'trace' || currentTool === 'refine') && outline.samClicks && outline.samClicks.map((click, i) => (
                   <circle
@@ -421,6 +441,39 @@ export const TracingOverlay: React.FC<TracingOverlayProps> = ({
               >
                 {outline.name}
               </text>
+            )}
+
+            {/* Edit anchors — shown for EVERY outline in edit mode (not just the
+                selected one) so any tool's points can be dragged without first
+                re-selecting it. Dragging one reshapes only its local region. */}
+            {currentTool === 'edit' && editState[outline.id] && (
+              <>
+                <polygon
+                  points={editState[outline.id].anchors.map(p => `${p.x},${p.y}`).join(' ')}
+                  fill="none"
+                  stroke={outline.color}
+                  strokeWidth={strokeWidth}
+                  strokeDasharray={`${3 / zoom} ${3 / zoom}`}
+                  opacity={0.4}
+                  style={{ pointerEvents: 'none' }}
+                />
+                {editState[outline.id].anchors.map((point, i) => {
+                  const active = dragPoint?.id === outline.id && dragPoint?.index === i;
+                  return (
+                    <circle
+                      key={`anchor-${i}`}
+                      cx={point.x}
+                      cy={point.y}
+                      r={active ? Math.max(5, 9 / zoom) : Math.max(4, 7 / zoom)}
+                      fill={active ? outline.color : 'white'}
+                      stroke={outline.color}
+                      strokeWidth={strokeWidth * 1.5}
+                      style={{ cursor: 'grab' }}
+                      onMouseDown={(e) => handlePointMouseDown(e, outline.id, i)}
+                    />
+                  );
+                })}
+              </>
             )}
           </g>
         );
