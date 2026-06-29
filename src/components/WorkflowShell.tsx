@@ -211,7 +211,7 @@ export const WorkflowShell: React.FC = () => {
               paperConfidence: data.paperConfidence || 0,
               pixelsPerMm: data.pixelsPerMm || null,
               toolOutlines: data.toolOutlines || [],
-              clearanceValue: data.clearanceValue ?? 0.5,
+              clearanceValue: data.clearanceValue ?? 1.0,
               layoutState: data.layoutState || store.layoutState,
               designSettings: data.designSettings || store.designSettings,
               currentStep: 'paper',
