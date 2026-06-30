@@ -7,24 +7,58 @@
  * IS-Net drops, but fp32/1024² OOMs the browser — so it runs here. Session is
  * loaded once and warmed; threading + graph-opt minimise per-request latency.
  *
- * Run:  node server/trace-server.cjs       (uses root node_modules: onnxruntime-node, sharp)
- * Env:  PORT (8787) · BIREFNET_MODEL (public/models/birefnet_lite.onnx) · ORT_THREADS
+ * Run:  node server/trace-server.cjs       (local: uses root node_modules + local model)
+ * Env:  PORT (8787) · BIREFNET_MODEL (path) · BIREFNET_MODEL_URL (fetch if missing) ·
+ *       ORT_THREADS · TRACE_KEY (if set, /trace requires header X-Trace-Key to match)
  */
 const http = require('http');
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
+const httpc = require('http');
 const ort = require('onnxruntime-node');
 const sharp = require('sharp');
 
 const PORT = Number(process.env.PORT) || 8787;
 const MODEL = process.env.BIREFNET_MODEL || 'public/models/birefnet_lite.onnx';
+const MODEL_URL = process.env.BIREFNET_MODEL_URL || ''; // download here if MODEL absent (Railway etc.)
+const TRACE_KEY = process.env.TRACE_KEY || '';          // shared secret; empty = open (local dev)
 const THREADS = Number(process.env.ORT_THREADS) || Math.max(1, os.cpus().length);
 const SIZE = 1024;
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 
 let session = null;
 
+// The 224MB model isn't in git. Locally it's a file on disk; on a host (Railway)
+// set BIREFNET_MODEL_URL (e.g. a Cloudflare R2 / S3 object) and it's fetched once
+// at startup. Follows redirects (object stores 302 to a signed URL).
+function downloadModel(url, dest) {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    const tmp = `${dest}.part`;
+    const file = fs.createWriteStream(tmp);
+    const get = (u, depth) => {
+      if (depth > 5) { reject(new Error('too many redirects')); return; }
+      (u.startsWith('https') ? https : httpc).get(u, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) { res.resume(); get(res.headers.location, depth + 1); return; }
+        if (res.statusCode !== 200) { res.resume(); reject(new Error(`model download HTTP ${res.statusCode}`)); return; }
+        res.pipe(file);
+        file.on('finish', () => file.close(() => { fs.renameSync(tmp, dest); resolve(); }));
+      }).on('error', reject);
+    };
+    get(url, 0);
+  });
+}
+
 async function init() {
   const t0 = Date.now();
+  if (!fs.existsSync(MODEL)) {
+    if (!MODEL_URL) throw new Error(`Model not found at ${MODEL} and BIREFNET_MODEL_URL is not set`);
+    console.log(`model missing at ${MODEL} — downloading from ${MODEL_URL} …`);
+    await downloadModel(MODEL_URL, MODEL);
+    console.log(`model downloaded (${(fs.statSync(MODEL).size / 1e6).toFixed(0)}MB)`);
+  }
   // Sequential + single inter-op thread, all intra-op threads on the one operator:
   // fastest config in benchmarking (parallel/inter-op only added overhead here).
   // Latency scales with physical cores — ~8s on a 4-core dev box, ~3-4s on a server.
@@ -66,7 +100,7 @@ async function trace(imgBuf) {
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Trace-Key');
   // The app is cross-origin isolated (COOP/COEP require-corp for WASM threads);
   // this lets its fetch() consume our cross-origin response.
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -76,6 +110,8 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: !!session, model: 'BiRefNet Lite', threads: THREADS }));
     return;
   }
+  // Shared-secret gate (only when TRACE_KEY is configured, so local dev stays open).
+  if (TRACE_KEY && req.headers['x-trace-key'] !== TRACE_KEY) { res.writeHead(401); res.end('unauthorized'); return; }
   if (req.method === 'POST' && req.url === '/trace') {
     if (!session) { res.writeHead(503); res.end('model not ready'); return; }
     const chunks = [];

@@ -56,6 +56,8 @@ function request<T>(type: string, payload: unknown, transfer: Transferable[] = [
 
 // Optional backend tracer (BiRefNet on CPU) — see the header. Empty = in-browser only.
 const TRACER_URL = ((import.meta.env.VITE_TRACER_URL as string | undefined) || '').replace(/\/+$/, '');
+// Shared secret for the backend's TRACE_KEY gate (set on a hosted/public tracer).
+const TRACER_KEY = (import.meta.env.VITE_TRACER_KEY as string | undefined) || '';
 
 type Seg = { mask: ArrayBuffer; width: number; height: number; device: string };
 
@@ -71,7 +73,9 @@ async function backendSegment(crop: Uint8ClampedArray, cw: number, ch: number): 
   const blob: Blob = await new Promise((res, rej) =>
     enc.toBlob((b) => (b ? res(b) : rej(new Error('crop encode failed'))), 'image/png'));
 
-  const resp = await fetch(`${TRACER_URL}/trace`, { method: 'POST', body: blob, headers: { 'Content-Type': 'image/png' } });
+  const headers: Record<string, string> = { 'Content-Type': 'image/png' };
+  if (TRACER_KEY) headers['X-Trace-Key'] = TRACER_KEY;
+  const resp = await fetch(`${TRACER_URL}/trace`, { method: 'POST', body: blob, headers });
   if (!resp.ok) throw new Error(`tracer HTTP ${resp.status}`);
   console.log(`%c🧠 BACKEND TRACER: BiRefNet Lite (${resp.headers.get('x-trace-ms') || '?'}ms @ ${TRACER_URL})`, 'color:#22c55e;font-weight:bold');
   const bmp = await createImageBitmap(await resp.blob());
