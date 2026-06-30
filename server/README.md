@@ -18,9 +18,26 @@ node server/trace-server.cjs          # uses the local model at public/models/bi
 | `BIREFNET_MODEL` | model path (container default `/app/models/birefnet_lite.onnx`) |
 | `BIREFNET_MODEL_URL` | if the model file is absent, download it from here at startup (Railway) |
 | `TRACE_KEY` | if set, `/trace` requires header `X-Trace-Key` to match (leave unset locally) |
-| `ORT_THREADS` | inference threads (default = CPU count) |
+| `ORT_THREADS` | inference threads. Default = `os.cpus()` which on a shared host = the HOST's core count, not your allocation → set this to your real vCPU count or inference thrashes (e.g. `2` on HF free) |
 
-## Deploy to Railway
+## Deploy to Hugging Face Spaces (current live host)
+The live tracer runs on a **free HF Space** (CPU basic = 2 vCPU / 16 GB). Files in
+[`deploy/hf/`](../deploy/hf) (`Dockerfile` listens on **7860** per HF convention +
+the Space `README.md`); upload them plus `server/trace-server.cjs` + `server/package.json`
+to the Space repo root, then set Space **secrets/variables**:
+- `BIREFNET_MODEL_URL` = the R2 model URL
+- `TRACE_KEY` = a long random secret
+- `ORT_THREADS` = **2**  ← important: the container *sees* the host's 16 CPUs but only
+  gets 2 vCPU, so without this ORT spawns 16 threads that thrash → ~90s/trace. At 2 it's
+  ~24s. (Bump to a paid CPU tier for ~5–8s; no code change.)
+
+Point the app at it: Cloudflare Pages → env vars `VITE_TRACER_URL` = the Space URL,
+`VITE_TRACER_KEY` = the same secret → redeploy `main`.
+
+> Railway (below) was tried first but its free tier caps at **1 GB RAM** → the model
+> load OOM-crash-loops. Use it only on a paid plan with ≥4 GB.
+
+## Deploy to Railway (needs ≥4 GB RAM — free 1 GB OOMs)
 1. **Host the model** (it's 224MB, gitignored). Upload `public/models/birefnet_lite.onnx`
    to a public/presigned URL — e.g. a Cloudflare R2 bucket — and copy that URL.
 2. **Railway** → New Project → *Deploy from GitHub repo* → this repo.
