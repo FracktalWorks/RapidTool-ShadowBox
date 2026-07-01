@@ -8,6 +8,7 @@
  */
 
 import type { Point2D, PaperCorners } from '../lib/geometry';
+import { useProgress } from '../stores/progressStore';
 
 // Types
 export type { Point2D, PaperCorners };
@@ -109,7 +110,15 @@ const A4_WIDTH_MM = 210;
  */
 export async function detectPaper(imageUrl: string): Promise<PaperDetectionResult> {
   const imageData = await getImageData(imageUrl);
+  useProgress.getState().start('Detecting paper…', 2500);
+  try {
+    return await detectPaperInner(imageData);
+  } finally {
+    useProgress.getState().done();
+  }
+}
 
+async function detectPaperInner(imageData: ImageData): Promise<PaperDetectionResult> {
   try {
     const result = await request<PaperDetectionResult>('detectPaper', { imageData });
     if (result.detected && result.corners) {

@@ -11,6 +11,7 @@
 
 import type { ToolTracingResult, PaperCorners, ToolProposal } from './cvWorkerManager';
 import { contourFromMask, proposeRegions, getImageData } from './cvWorkerManager';
+import { useProgress } from '../stores/progressStore';
 
 // Scale a contour (in processing-resolution space) back to original image space.
 function scaleResult(r: ToolTracingResult | null, scale: number): ToolTracingResult | null {
@@ -112,6 +113,21 @@ export async function samSegmentPoint(
   clicks: { x: number; y: number; label: number }[],
   opts?: { paperCorners?: PaperCorners; onProgress?: (p: SamLoadProgress) => void },
 ): Promise<ToolTracingResult | null> {
+  const prog = useProgress.getState();
+  // First call also loads the model (~5–7s); after that, refine is quick.
+  prog.start('Refining selection…', samEverLoaded() ? 3000 : 7000);
+  try {
+    return await samSegmentPointInner(imageUrl, clicks, opts);
+  } finally {
+    prog.done();
+  }
+}
+
+async function samSegmentPointInner(
+  imageUrl: string,
+  clicks: { x: number; y: number; label: number }[],
+  opts?: { paperCorners?: PaperCorners; onProgress?: (p: SamLoadProgress) => void },
+): Promise<ToolTracingResult | null> {
   const imageData = await getImageData(imageUrl);
   const imgW = imageData.width, imgH = imageData.height;
   // The SAM request below TRANSFERS imageData.data.buffer to the worker, detaching
@@ -182,6 +198,20 @@ export async function samAutoSegment(
   paperCorners?: PaperCorners,
   onProgress?: (p: SamLoadProgress) => void,
 ): Promise<ToolTracingResult[]> {
+  const prog = useProgress.getState();
+  prog.start('Detecting tools…', samEverLoaded() ? 8000 : 14000);
+  try {
+    return await samAutoSegmentInner(imageUrl, paperCorners, onProgress);
+  } finally {
+    prog.done();
+  }
+}
+
+async function samAutoSegmentInner(
+  imageUrl: string,
+  paperCorners?: PaperCorners,
+  onProgress?: (p: SamLoadProgress) => void,
+): Promise<ToolTracingResult[]> {
   // Stage 1 — classical prompt proposal (instant, free).
   const proposals = await proposeRegions(imageUrl, paperCorners);
   if (proposals.length === 0) return [];
@@ -235,6 +265,20 @@ export async function samAutoSegment(
  * as the fast path.
  */
 export async function samAutoSegmentDense(
+  imageUrl: string,
+  paperCorners?: PaperCorners,
+  onProgress?: (p: SamLoadProgress) => void,
+): Promise<ToolTracingResult[]> {
+  const prog = useProgress.getState();
+  prog.start('Detecting tools…', samEverLoaded() ? 12000 : 18000);
+  try {
+    return await samAutoSegmentDenseInner(imageUrl, paperCorners, onProgress);
+  } finally {
+    prog.done();
+  }
+}
+
+async function samAutoSegmentDenseInner(
   imageUrl: string,
   paperCorners?: PaperCorners,
   onProgress?: (p: SamLoadProgress) => void,

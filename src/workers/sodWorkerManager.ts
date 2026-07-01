@@ -19,6 +19,8 @@
  */
 import type { PaperCorners, ToolTracingResult } from './cvWorkerManager';
 import { getImageData, traceMask } from './cvWorkerManager';
+import { useProgress } from '../stores/progressStore';
+import { logger } from '../utils/prodLogger';
 
 export interface SodProgress { status: string; device?: string }
 
@@ -58,13 +60,18 @@ function request<T>(type: string, payload: unknown, transfer: Transferable[] = [
 const TRACER_URL = ((import.meta.env.VITE_TRACER_URL as string | undefined) || '').replace(/\/+$/, '');
 // Shared secret for the backend's TRACE_KEY gate (set on a hosted/public tracer).
 const TRACER_KEY = (import.meta.env.VITE_TRACER_KEY as string | undefined) || '';
+// Upper bound for one backend trace. A warm trace is ~20–25s; past this the tracer
+// is almost certainly cold/asleep/unreachable, so we abort and fall back to in-browser
+// IS-Net rather than leave the user waiting indefinitely.
+const BACKEND_TIMEOUT_MS = Number(import.meta.env.VITE_TRACER_TIMEOUT_MS) || 45000;
 
 type Seg = { mask: ArrayBuffer; width: number; height: number; device: string };
 
 /**
  * POST the RGBA crop to the backend tracer as PNG; it returns a grayscale mask
  * PNG at the crop's size, which we threshold to the same 0/255 binary the
- * in-browser worker emits. Throws on any failure so the caller can fall back.
+ * in-browser worker emits. Aborts after BACKEND_TIMEOUT_MS and throws on any
+ * failure so the caller can fall back to IS-Net.
  */
 async function backendSegment(crop: Uint8ClampedArray, cw: number, ch: number): Promise<Seg> {
   const enc = document.createElement('canvas');
@@ -75,9 +82,17 @@ async function backendSegment(crop: Uint8ClampedArray, cw: number, ch: number): 
 
   const headers: Record<string, string> = { 'Content-Type': 'image/png' };
   if (TRACER_KEY) headers['X-Trace-Key'] = TRACER_KEY;
-  const resp = await fetch(`${TRACER_URL}/trace`, { method: 'POST', body: blob, headers });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
+  let resp: Response;
+  try {
+    resp = await fetch(`${TRACER_URL}/trace`, { method: 'POST', body: blob, headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!resp.ok) throw new Error(`tracer HTTP ${resp.status}`);
-  console.log(`%c🧠 BACKEND TRACER: BiRefNet Lite (${resp.headers.get('x-trace-ms') || '?'}ms @ ${TRACER_URL})`, 'color:#22c55e;font-weight:bold');
+  logger.info(`BiRefNet tracer · ${resp.headers.get('x-trace-ms') || '?'}ms`);
   const bmp = await createImageBitmap(await resp.blob());
 
   const dec = document.createElement('canvas');
@@ -103,7 +118,7 @@ async function segmentCrop(crop: Uint8ClampedArray, cw: number, ch: number, onPr
       onProgress?.({ status: 'backend_trace', device: 'backend' });
       return await backendSegment(crop, cw, ch);
     } catch (e) {
-      console.warn('[SOD] backend tracer unavailable, falling back to in-browser IS-Net:', e instanceof Error ? e.message : e);
+      logger.warn('Backend tracer unavailable — using in-browser IS-Net:', e instanceof Error ? e.message : e);
     }
   }
   return request<Seg>('segment', { rgbaData: crop, width: cw, height: ch }, [crop.buffer], onProgress);
@@ -180,6 +195,22 @@ function maskToRgba(mask: Uint8Array, w: number, h: number): Uint8ClampedArray {
  * full-image coordinates.
  */
 export async function sodDetect(
+  imageUrl: string,
+  paperCorners?: PaperCorners,
+  onProgress?: (p: SodProgress) => void,
+): Promise<ToolTracingResult[]> {
+  const prog = useProgress.getState();
+  // Backend is ~18–24s; in-browser ~6–9s — size the estimate to fit. User-facing
+  // label stays generic (no model names) per product copy guidelines.
+  prog.start('Tracing tools…', TRACER_URL ? 22000 : 9000);
+  try {
+    return await sodDetectInner(imageUrl, paperCorners, onProgress);
+  } finally {
+    prog.done();
+  }
+}
+
+async function sodDetectInner(
   imageUrl: string,
   paperCorners?: PaperCorners,
   onProgress?: (p: SodProgress) => void,

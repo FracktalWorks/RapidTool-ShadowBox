@@ -39,6 +39,7 @@ import { LayoutWorkspace } from './LayoutWorkspace';
 import { DesignWorkspace } from './DesignWorkspace';
 import { ExportWorkspace } from './ExportWorkspace';
 import { ErrorBoundary } from './ErrorBoundary';
+import { ProgressBar } from './ProgressBar';
 
 // ── Step config ─────────────────────────────────────────────────────────────
 interface StepConfig {
@@ -247,6 +248,8 @@ export const WorkflowShell: React.FC = () => {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
+      {/* Global loading bar — shows for any long flow (paper detect, trace, SAM, STL) */}
+      <ProgressBar />
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <header className="h-14 flex items-center justify-between px-4 border-b border-border/50 tech-glass">
         {/* Left */}

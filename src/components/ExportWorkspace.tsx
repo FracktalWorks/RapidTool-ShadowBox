@@ -19,6 +19,7 @@ import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/grid
 import { offsetPolygon } from '../lib/geometry';
 import { Download, FileCode, Box, RotateCcw, Layers, AlertCircle } from 'lucide-react';
 import { downloadSVG } from '../lib/exportSVG';
+import { useProgress } from '../stores/progressStore';
 
 // Extend JSX.IntrinsicElements for R3F
 declare module 'react' {
@@ -956,6 +957,7 @@ export const ExportWorkspace: React.FC = () => {
         downloadSVG(outlinesToExport, pixelsPerMm, 'tooltrace-export.svg');
       } else {
         // Export a watertight, manifold STL (repaired via Manifold3D).
+        useProgress.getState().start('Building 3D model…', 6000);
         const mesh = generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings, clearanceValue);
         const blob = await buildManifoldStlBlob(mesh);
 
@@ -981,6 +983,7 @@ export const ExportWorkspace: React.FC = () => {
       setTimeout(() => setExportError(null), 6000);
     } finally {
       setProcessing(false);
+      useProgress.getState().done();
     }
   }, [exportFormat, toolOutlines, layoutState, designSettings, pixelsPerMm, clearanceValue, setProcessing]);
   
