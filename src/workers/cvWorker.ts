@@ -21,6 +21,14 @@
 // Load OpenCV.js from public directory
 (self as any).importScripts('/opencv.js');
 
+// Verbose trace logging — auto-enabled only on localhost (dev). In production the
+// console stays clean and formal: internals (per-contour gate decisions, mask sizes)
+// are NOT dumped openly. Warnings/errors still surface via console.warn/error.
+const _host: string = (self as any).location?.hostname || '';
+const VERBOSE = _host === 'localhost' || _host === '127.0.0.1';
+const _rawLog = console.log.bind(console);
+const log = (...args: unknown[]): void => { if (VERBOSE) _rawLog(...args); };
+
 // Types
 interface Point2D { x: number; y: number }
 interface PaperCorners { topLeft: Point2D; topRight: Point2D; bottomRight: Point2D; bottomLeft: Point2D }
@@ -77,14 +85,14 @@ function initOpenCV(): Promise<void> {
 
     if (typeof cvLib.Mat === 'function') {
       cv = cvLib;
-      console.log('OpenCV ready');
+      log('OpenCV ready');
       resolve();
       return;
     }
 
     cvLib.onRuntimeInitialized = () => {
       cv = cvLib;
-      console.log('OpenCV initialized');
+      log('OpenCV initialized');
       resolve();
     };
 
@@ -520,7 +528,7 @@ function autoTunedCanny(blurred: any, sigma = 0.33): any {
   const lower = clamp(Math.round((1 - sigma) * median), 10, 100);
   const upper = clamp(Math.round((1 + sigma) * median), 50, 200);
 
-  console.log(`Auto Canny: median=${median}, thresholds=[${lower}, ${upper}]`);
+  log(`Auto Canny: median=${median}, thresholds=[${lower}, ${upper}]`);
 
   const edges = new cv.Mat();
   cv.Canny(blurred, edges, lower, upper);
@@ -580,7 +588,7 @@ const refineCornersByGradient = (gray: any, corners: Point2D[]): Point2D[] => {
 };
 
 function detectPaper(imageData: ImageData) {
-  console.log('Detecting paper...', imageData.width, 'x', imageData.height);
+  log('Detecting paper...', imageData.width, 'x', imageData.height);
   const src = cv.matFromImageData(imageData);
   const totalArea = src.rows * src.cols;
 
@@ -616,7 +624,7 @@ function detectPaper(imageData: ImageData) {
     ? (avgW / A4_HEIGHT_MM + avgH / A4_WIDTH_MM) / 2
     : (avgW / A4_WIDTH_MM + avgH / A4_HEIGHT_MM) / 2;
 
-  console.log('Paper detected:', Math.round(best.confidence * 100) + '%');
+  log('Paper detected:', Math.round(best.confidence * 100) + '%');
   return {
     detected: true,
     confidence: best.confidence,
@@ -655,7 +663,7 @@ function rectifyToA4(imageData: ImageData, corners: PaperCorners): { rgba: Array
   const rgba = new Uint8ClampedArray(dst.data).buffer; // copy RGBA bytes out of the Mat
   const width = dst.cols, height = dst.rows;
   deleteMats(src, srcTri, dstTri, M, dst);
-  console.log(`rectifyToA4: ${imageData.width}x${imageData.height} -> ${width}x${height} (${landscape ? 'landscape' : 'portrait'})`);
+  log(`rectifyToA4: ${imageData.width}x${imageData.height} -> ${width}x${height} (${landscape ? 'landscape' : 'portrait'})`);
   return { rgba, width, height };
 }
 
@@ -711,7 +719,7 @@ function detectPaperByEdges(gray: any, totalArea: number): { points: Point2D[]; 
 
   if (needsCLAHE) {
     processed = applyCLAHE(gray, 2.0, 8);
-    console.log('Applied CLAHE for paper detection');
+    log('Applied CLAHE for paper detection');
   }
 
   // Bilateral filter - preserves edges better than Gaussian
@@ -808,7 +816,7 @@ function traceTool(
   clickY: number,
   paperCorners?: PaperCorners
 ): TraceResult | null {
-  console.log('traceTool called at:', clickX, clickY, paperCorners ? '(paper-masked)' : '');
+  log('traceTool called at:', clickX, clickY, paperCorners ? '(paper-masked)' : '');
   const src = cv.matFromImageData(imageData);
   const x = Math.max(0, Math.min(src.cols - 1, Math.round(clickX)));
   const y = Math.max(0, Math.min(src.rows - 1, Math.round(clickY)));
@@ -819,12 +827,12 @@ function traceTool(
   // Fallback: retry without the paper boundary, in case slightly-off corners
   // clipped a tool that sits near the paper edge.
   if (!result && paperCorners) {
-    console.log('traceTool: paper-masked trace empty, retrying without boundary');
+    log('traceTool: paper-masked trace empty, retrying without boundary');
     result = traceByFusedMask(src, x, y, undefined);
   }
 
   src.delete();
-  console.log('traceTool result:', result ? `${result.points.length} pts, conf=${result.confidence?.toFixed(2)}` : 'null');
+  log('traceTool result:', result ? `${result.points.length} pts, conf=${result.confidence?.toFixed(2)}` : 'null');
   return result;
 }
 
@@ -883,7 +891,7 @@ function traceByFusedMask(
   if (bestContour) {
     const confidence = contourConfidence(bestContour);
     result = extractContourPoints(bestContour, 0, 0, bestArea, confidence);
-    console.log(`Fused trace: area=${Math.round(bestArea)}, conf=${confidence.toFixed(2)}`);
+    log(`Fused trace: area=${Math.round(bestArea)}, conf=${confidence.toFixed(2)}`);
   }
 
   deleteMats(mask, contours, hierarchy);
@@ -892,7 +900,7 @@ function traceByFusedMask(
 
 // Trace rectangular region
 function traceRegion(imageData: ImageData, rect: { x: number; y: number; width: number; height: number }) {
-  console.log('traceRegion called:', rect);
+  log('traceRegion called:', rect);
   const src = cv.matFromImageData(imageData);
 
   const x = Math.max(0, Math.round(rect.x));
@@ -911,7 +919,7 @@ function traceRegion(imageData: ImageData, rect: { x: number; y: number; width: 
   roi.delete();
   src.delete();
 
-  console.log('traceRegion result:', result ? `${result.points.length} points` : 'null');
+  log('traceRegion result:', result ? `${result.points.length} points` : 'null');
   return result;
 }
 
@@ -992,7 +1000,7 @@ function extractContourPoints(
 function tracePreparedMask(mask: any, rows: number, cols: number, trusted = false, finalizeImage?: ImageData, highQuality = false): TraceResult[] {
   const totalArea = rows * cols;
   const maskPx = cv.countNonZero(mask);
-  console.log(`tracePreparedMask: input mask=${maskPx}px (${(100 * maskPx / totalArea).toFixed(1)}% of frame)${trusted ? ' [SOD/trusted]' : ' [classical]'}${finalizeImage ? ' [snake]' : ''}`);
+  log(`tracePreparedMask: input mask=${maskPx}px (${(100 * maskPx / totalArea).toFixed(1)}% of frame)${trusted ? ' [SOD/trusted]' : ' [classical]'}${finalizeImage ? ' [snake]' : ''}`);
 
   // Stage B snake source: a grayscale aligned to the mask, used to evolve each
   // gated contour to the real image edge. When present, we SKIP the smoothing
@@ -1051,19 +1059,19 @@ function tracePreparedMask(mask: any, rows: number, cols: number, trusted = fals
     const contour = contours.get(i);
     const area = cv.contourArea(contour);
     if (area < minArea || area > totalArea * 0.6) {
-      console.log(`  reject contour ${i}: area=${Math.round(area)} (bounds ${Math.round(minArea)}–${Math.round(totalArea * 0.6)})`);
+      log(`  reject contour ${i}: area=${Math.round(area)} (bounds ${Math.round(minArea)}–${Math.round(totalArea * 0.6)})`);
       contour.delete(); continue;
     }
 
     const solidity = calculateSolidity(contour);
-    if (solidity < 0.15) { console.log(`  reject contour ${i}: solidity=${solidity.toFixed(2)} < 0.15`); contour.delete(); continue; }
+    if (solidity < 0.15) { log(`  reject contour ${i}: solidity=${solidity.toFixed(2)} < 0.15`); contour.delete(); continue; }
 
     const mar = cv.minAreaRect(contour);
     const minorDim = Math.min(mar.size.width, mar.size.height);
     const aspect = Math.max(mar.size.width, mar.size.height) / Math.max(1, minorDim);
     const minThick = Math.max(8, Math.round(Math.min(rows, cols) * 0.006));
     if (aspect > maxAspect || minorDim < minThick) {
-      console.log(`  reject contour ${i}: aspect=${aspect.toFixed(1)} (max ${maxAspect}), minorDim=${minorDim.toFixed(0)} (min ${minThick})`);
+      log(`  reject contour ${i}: aspect=${aspect.toFixed(1)} (max ${maxAspect}), minorDim=${minorDim.toFixed(0)} (min ${minThick})`);
       contour.delete(); continue;
     }
 
@@ -1076,7 +1084,7 @@ function tracePreparedMask(mask: any, rows: number, cols: number, trusted = fals
       // real curves/edges are preserved; the classical path stays a touch looser.
       results.push(extractContourPoints(contour, 0, 0, area, confidence, trusted ? 0.5 : 1));
     }
-    console.log(`Found tool: area=${Math.round(area)}, conf=${confidence.toFixed(2)}, minorDim=${minorDim.toFixed(0)}, aspect=${aspect.toFixed(1)}`);
+    log(`Found tool: area=${Math.round(area)}, conf=${confidence.toFixed(2)}, minorDim=${minorDim.toFixed(0)}, aspect=${aspect.toFixed(1)}`);
     contour.delete();
   }
 
@@ -1086,13 +1094,13 @@ function tracePreparedMask(mask: any, rows: number, cols: number, trusted = fals
 }
 
 function traceAllTools(imageData: ImageData, paperCorners?: PaperCorners): TraceResult[] {
-  console.log('traceAllTools: finding all tools on paper...', paperCorners ? 'with boundary masking' : '');
+  log('traceAllTools: finding all tools on paper...', paperCorners ? 'with boundary masking' : '');
   const src = cv.matFromImageData(imageData);
   const mask = buildToolMask(src, paperCorners);
   const results = tracePreparedMask(mask, src.rows, src.cols);
   deleteMats(mask);
   src.delete();
-  console.log(`traceAllTools: found ${results.length} tools`);
+  log(`traceAllTools: found ${results.length} tools`);
   return results;
 }
 
@@ -1333,7 +1341,7 @@ function snakeRefineContour(contour: any, gray: any, knobs?: any): Point2D[] {
 function traceMask(maskData: Uint8Array, width: number, height: number, imageData?: ImageData, highQuality = false): TraceResult[] {
   const raw = new cv.Mat(height, width, cv.CV_8UC1);
   raw.data.set(maskData);
-  console.log(`traceMask: raw SOD mask=${cv.countNonZero(raw)}px${highQuality ? ' [high-quality → direct trace]' : ''}`);
+  log(`traceMask: raw SOD mask=${cv.countNonZero(raw)}px${highQuality ? ' [high-quality → direct trace]' : ''}`);
 
   // A high-quality model mask (backend BiRefNet) is already tight, edge-accurate
   // and shadow-free. The GrabCut edge-refine + active-contour snake below are
@@ -1354,22 +1362,22 @@ function traceMask(maskData: Uint8Array, width: number, height: number, imageDat
     cv.threshold(raw, raw, 127, 255, cv.THRESH_BINARY);
     const results = tracePreparedMask(raw, height, width, true, undefined, true);
     raw.delete();
-    console.log(`traceMask: found ${results.length} tools (direct trace, smooth k=${sk})`);
+    log(`traceMask: found ${results.length} tools (direct trace, smooth k=${sk})`);
     return results;
   }
 
   let mask = imageData ? refineMaskToEdges(raw, imageData) : raw.clone();
   if (imageData) {
-    console.log(`traceMask: after edge-refine=${cv.countNonZero(mask)}px`);
+    log(`traceMask: after edge-refine=${cv.countNonZero(mask)}px`);
     // Stage B shadow matting (colour physics) — replaces the old hole-fill
     // suppressShadowNoise on the SOD path. Can't balloon; multi-tool safe.
     const cleaned = removeShadowColor(mask, imageData); mask.delete(); mask = cleaned;
-    console.log(`traceMask: after shadow-color-removal=${cv.countNonZero(mask)}px`);
+    log(`traceMask: after shadow-color-removal=${cv.countNonZero(mask)}px`);
   }
   // Pass the image so tracePreparedMask snakes each contour to the real edge.
   const results = tracePreparedMask(mask, height, width, true, imageData);
   deleteMats(raw, mask);
-  console.log(`traceMask: found ${results.length} tools${imageData ? ' (Stage B: shadow-matted + snake)' : ''}`);
+  log(`traceMask: found ${results.length} tools${imageData ? ' (Stage B: shadow-matted + snake)' : ''}`);
   return results;
 }
 
@@ -1694,7 +1702,7 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
         bottomLeft: { x: paperCorners.bottomLeft.x * scale, y: paperCorners.bottomLeft.y * scale },
       };
     }
-    console.log(`proposeRegions: Downscaled processing image from ${origW}x${origH} to ${src.cols}x${src.rows} (scale=${scale.toFixed(4)})`);
+    log(`proposeRegions: Downscaled processing image from ${origW}x${origH} to ${src.cols}x${src.rows} (scale=${scale.toFixed(4)})`);
   }
 
   const rows = src.rows, cols = src.cols;
@@ -1901,7 +1909,7 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
           }
 
           if (validSubCount >= 2) {
-            console.log(`proposeRegions: split mega-blob [x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}] into ${validSubCount} parts using kSize=${kSize}`);
+            log(`proposeRegions: split mega-blob [x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}] into ${validSubCount} parts using kSize=${kSize}`);
             for (const cand of tempCands) {
               const proposal = buildProposalFromContour(cand.contour, cand.area, rows, cols, combined);
               if (proposal) {
@@ -1927,7 +1935,7 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
         }
         tempMask.delete();
       } catch (splitErr: any) {
-        console.log(`[WORKER ERROR] Split candidate failed for contour ${i}: ${splitErr.message}`);
+        log(`[WORKER ERROR] Split candidate failed for contour ${i}: ${splitErr.message}`);
       }
     }
 
@@ -2023,7 +2031,7 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
     }
 
     if (sparsePrompts.length > 0) {
-      console.log(`proposeRegions: added ${sparsePrompts.length} sparse SAM prompts`);
+      log(`proposeRegions: added ${sparsePrompts.length} sparse SAM prompts`);
       proposals.push(...sparsePrompts);
     }
   }
@@ -2054,10 +2062,10 @@ function proposeRegions(imageData: ImageData, paperCorners?: PaperCorners): Tool
     }));
   }
 
-  console.log(`proposeRegions: found ${finalProposals.length} unified proposals`);
+  log(`proposeRegions: found ${finalProposals.length} unified proposals`);
   for (let i = 0; i < finalProposals.length; i++) {
     const p = finalProposals[i];
-    console.log(`  Proposal ${i}: bbox=[x=${p.bbox.x}, y=${p.bbox.y}, w=${p.bbox.w}, h=${p.bbox.h}], positives=${p.positivePoints.length}, negatives=${p.negativePoints.length}`);
+    log(`  Proposal ${i}: bbox=[x=${p.bbox.x}, y=${p.bbox.y}, w=${p.bbox.w}, h=${p.bbox.h}], positives=${p.positivePoints.length}, negatives=${p.negativePoints.length}`);
   }
   return finalProposals;
 }
@@ -2136,7 +2144,7 @@ function contourFromMask(mask: Uint8Array, width: number, height: number, imageD
   // as it is likely a background bleed
   const maxArea = width * height * 0.70;
   if (bestArea > maxArea) {
-    console.log(`contourFromMask: Rejecting contour with area ${Math.round(bestArea)} (exceeds 70% image area of ${Math.round(maxArea)})`);
+    log(`contourFromMask: Rejecting contour with area ${Math.round(bestArea)} (exceeds 70% image area of ${Math.round(maxArea)})`);
     if (best) best.delete();
     deleteMats(m, kClose, kOpen, contours, hierarchy);
     return null;

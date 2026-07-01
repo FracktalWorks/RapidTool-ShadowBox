@@ -18,6 +18,10 @@ import {
   RawImage,
 } from '@huggingface/transformers';
 
+// Verbose logs only in dev — production console stays clean. warn/error still show.
+const _rawLog = console.log.bind(console);
+const log = (...args: unknown[]): void => { if (import.meta.env.DEV) _rawLog(...args); };
+
 // Fetch weights from the HF Hub (no local model files bundled).
 env.allowLocalModels = false;
 // Single-threaded WASM avoids cross-origin-isolation (COOP/COEP) requirements.
@@ -69,13 +73,13 @@ async function ensureLoaded(id: string): Promise<void> {
     
     try {
       // Try to load SAM 2.1 Hiera Tiny
-      console.log(`%c[SAM] Attempting to load SAM 2.1 Tiny (${device})...`, 'color: #3b82f6; font-weight: bold;');
+      log(`%c[SAM] Attempting to load SAM 2.1 Tiny (${device})...`, 'color: #3b82f6; font-weight: bold;');
       model = await Sam2Model.from_pretrained(MODEL_ID, { device, progress_callback } as any);
       processor = await AutoProcessor.from_pretrained(MODEL_ID);
       isSam2 = true;
-      console.log('%c===================================================', 'color: #22c55e; font-weight: bold;');
-      console.log(`%c[SAM] LOUD LOG: SUCCESSFULLY LOADED SAM 2.1 Tiny (${device})`, 'color: #22c55e; font-weight: bold; font-size: 14px;');
-      console.log('%c===================================================', 'color: #22c55e; font-weight: bold;');
+      log('%c===================================================', 'color: #22c55e; font-weight: bold;');
+      log(`%c[SAM] LOUD LOG: SUCCESSFULLY LOADED SAM 2.1 Tiny (${device})`, 'color: #22c55e; font-weight: bold; font-size: 14px;');
+      log('%c===================================================', 'color: #22c55e; font-weight: bold;');
       // Notify main thread definitively which model loaded
       post({ id, type: 'progress', payload: { status: 'model_loaded', model: `SAM 2.1 Hiera Tiny`, device, isSam2: true } });
     } catch (sam2Err) {
@@ -89,9 +93,9 @@ async function ensureLoaded(id: string): Promise<void> {
       }
       processor = await AutoProcessor.from_pretrained(SLIMSAM_MODEL_ID);
       isSam2 = false;
-      console.log('%c===================================================', 'color: #3b82f6; font-weight: bold;');
-      console.log(`%c[SAM] LOUD LOG: SUCCESSFULLY LOADED SLIMSAM FALLBACK (${device})`, 'color: #3b82f6; font-weight: bold; font-size: 12px;');
-      console.log('%c===================================================', 'color: #3b82f6; font-weight: bold;');
+      log('%c===================================================', 'color: #3b82f6; font-weight: bold;');
+      log(`%c[SAM] LOUD LOG: SUCCESSFULLY LOADED SLIMSAM FALLBACK (${device})`, 'color: #3b82f6; font-weight: bold; font-size: 12px;');
+      log('%c===================================================', 'color: #3b82f6; font-weight: bold;');
       // Notify main thread definitively which model loaded
       post({ id, type: 'progress', payload: { status: 'model_loaded', model: `SlimSAM (FALLBACK)`, device, isSam2: false } });
     }
@@ -120,10 +124,10 @@ async function embed(
       rgbData[i * 3 + 2] = rgbaData[i * 4 + 2];
     }
     image = new RawImage(rgbData, width, height, 3);
-    console.log(`[SAM] Embedded image from raw pixels: ${width}x${height}`);
+    log(`[SAM] Embedded image from raw pixels: ${width}x${height}`);
   } else {
     image = await RawImage.read(url);
-    console.log(`[SAM] Embedded image from URL: ${url}`);
+    log(`[SAM] Embedded image from URL: ${url}`);
   }
 
   const origW = image.width, origH = image.height;
@@ -341,9 +345,9 @@ async function decodeAt(
   }
 
   // Detailed debug logging
-  console.log(`[SAM] decodeAt mask selection info:`);
+  log(`[SAM] decodeAt mask selection info:`);
   for (let i = 0; i < nMasks; i++) {
-    console.log(`  Mask ${i}: score=${scores[i].toFixed(4)}, area=${maskAreas[i]}${i === highestScoreIdx ? ' (highest score)' : ''}${i === best ? ' (SELECTED)' : ''}`);
+    log(`  Mask ${i}: score=${scores[i].toFixed(4)}, area=${maskAreas[i]}${i === highestScoreIdx ? ' (highest score)' : ''}${i === best ? ' (SELECTED)' : ''}`);
   }
 
   const off = best * H * W;
@@ -379,7 +383,7 @@ async function segmentPoint(
   // by multi-click) still scores ~0.1+, so a low floor separates noise from signal.
   // Better to add nothing (user retries / uses Box Select) than corrupt the trace.
   if (r.score < 0.05) {
-    console.log(`[SAM] click rejected — score ${r.score.toFixed(4)} too low (ambiguous prompt)`);
+    log(`[SAM] click rejected — score ${r.score.toFixed(4)} too low (ambiguous prompt)`);
     return null;
   }
 
@@ -393,7 +397,7 @@ async function segmentPoint(
   for (let i = 0; i < r.data.length; i++) if (r.data[i]) area++;
   const procArea = r.width * r.height;
   if (area < procArea * 0.0005 || area > procArea * 0.30) {
-    console.log(`[SAM] click rejected — mask ${(100 * area / procArea).toFixed(1)}% of frame (not tool-sized)`);
+    log(`[SAM] click rejected — mask ${(100 * area / procArea).toFixed(1)}% of frame (not tool-sized)`);
     return null;
   }
 
@@ -449,16 +453,16 @@ async function autoSegment(
 
     if (pts.length === 0) continue;
 
-    console.log(`[SAM] decoding proposal ${i}: positives=${JSON.stringify(prop.positivePoints)}, negatives=${JSON.stringify(prop.negativePoints)}`);
+    log(`[SAM] decoding proposal ${i}: positives=${JSON.stringify(prop.positivePoints)}, negatives=${JSON.stringify(prop.negativePoints)}`);
 
     // Decode this proposal in a single pass with all positive + negative points
     const r = await decodeAt(pts, labels, paperCorners);
     if (!r) {
-      console.log(`[SAM] proposal ${i} skipped: no decode result`);
+      log(`[SAM] proposal ${i} skipped: no decode result`);
       continue;
     }
     if (r.score < 0.50) {
-      console.log(`[SAM] proposal ${i} skipped: score ${r.score.toFixed(4)} < 0.50`);
+      log(`[SAM] proposal ${i} skipped: score ${r.score.toFixed(4)} < 0.50`);
       continue;
     }
 
@@ -469,7 +473,7 @@ async function autoSegment(
     }
     const actualArea = maskArea * session.scaleToOriginal * session.scaleToOriginal;
     if (actualArea < minArea || actualArea > maxArea) {
-      console.log(`[SAM] proposal ${i} rejected — area ${Math.round(actualArea)}px² outside [${Math.round(minArea)}, ${Math.round(maxArea)}]`);
+      log(`[SAM] proposal ${i} rejected — area ${Math.round(actualArea)}px² outside [${Math.round(minArea)}, ${Math.round(maxArea)}]`);
       continue;
     }
 
@@ -524,7 +528,7 @@ async function autoSegment(
       // If overlapping or containment is too high, suppress the lower-scoring mask
       if (iou > IOU_THRESHOLD || containmentB > CONTAINMENT_THRESHOLD || containmentA > CONTAINMENT_THRESHOLD) {
         keep = false;
-        console.log(`[SAM] NMS suppressed proposal: score=${res.score.toFixed(3)} due to overlap with score=${kept.score.toFixed(3)} (iou=${iou.toFixed(3)}, contA=${containmentA.toFixed(3)}, contB=${containmentB.toFixed(3)})`);
+        log(`[SAM] NMS suppressed proposal: score=${res.score.toFixed(3)} due to overlap with score=${kept.score.toFixed(3)} (iou=${iou.toFixed(3)}, contA=${containmentA.toFixed(3)}, contB=${containmentB.toFixed(3)})`);
         break;
       }
     }
@@ -534,7 +538,7 @@ async function autoSegment(
     }
   }
 
-  console.log(`[SAM] NMS complete: kept ${finalResults.length} / ${results.length} proposals`);
+  log(`[SAM] NMS complete: kept ${finalResults.length} / ${results.length} proposals`);
   return { masks: finalResults, scale: session.scaleToOriginal };
 }
 
@@ -654,7 +658,7 @@ async function autoSegmentDense(
     if (!drop) kept.push(cand);
   }
 
-  console.log(`[SAM] dense AMG: ${decodes} decodes -> ${raw.length} masks -> ${kept.length} after NMS`);
+  log(`[SAM] dense AMG: ${decodes} decodes -> ${raw.length} masks -> ${kept.length} after NMS`);
   return {
     masks: kept.map((k) => ({ mask: k.data.buffer as ArrayBuffer, width: procW, height: procH, score: k.score })),
     scale: s2o,

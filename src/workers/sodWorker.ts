@@ -15,6 +15,10 @@
  */
 import * as ort from 'onnxruntime-web';
 
+// Verbose logs only in dev — production console stays clean. warn/error still show.
+const _rawLog = console.log.bind(console);
+const log = (...args: unknown[]): void => { if (import.meta.env.DEV) _rawLog(...args); };
+
 // onnxruntime-web loads its wasm-glue (.mjs) via a runtime import(). Vite refuses
 // to serve .mjs modules out of /public, so we load the ORT runtime from jsDelivr
 // at the EXACT version bundled here (the JS glue must match the .wasm binary).
@@ -123,7 +127,7 @@ async function initSession(id: string): Promise<void> {
   // crossOriginIsolated tells us whether SharedArrayBuffer (multi-thread) is live.
   const isolated = typeof self !== 'undefined' && (self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated;
   device = isolated && threads > 1 ? `wasm×${threads}` : 'wasm (1 thread)';
-  console.log(`%c🧠 SOD MODEL LOADED: ${M.label} (${device})`, 'color:#22c55e;font-weight:bold');
+  log(`%c🧠 SOD MODEL LOADED: ${M.label} (${device})`, 'color:#22c55e;font-weight:bold');
   post({ id, type: 'progress', payload: { status: 'model_loaded', device } });
 }
 

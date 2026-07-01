@@ -21,7 +21,7 @@ const crossOriginIsolation = {
 };
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     tailwindcss(),
@@ -35,6 +35,11 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['opencv.js', 'opencv.wasm']
   },
+  // Strip ALL console.* + debugger from PRODUCTION bundles so no internal logs are
+  // exposed in the end-user's browser console (dev keeps them). This is the robust,
+  // standard way to "abstract" client logs — client-side log encryption is security
+  // theatre (the key would ship in the public bundle); removal leaves nothing to read.
+  esbuild: mode === 'production' ? { drop: ['console', 'debugger'] } : {},
   publicDir: 'public',
   preview: {
     headers: {
@@ -42,4 +47,4 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'credentialless',
     },
   },
-})
+}))
