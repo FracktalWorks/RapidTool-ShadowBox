@@ -131,7 +131,32 @@ export const WorkflowShell: React.FC = () => {
     currentStep, setCurrentStep, projectName, setProjectName,
     isProcessing, processingMessage,
     paperDetected, toolOutlines, layoutState, resetAll,
+    undo, redo, undoStack, redoStack, selectOutline, selectLayoutShape, setLayoutTool,
   } = useAppStore();
+  const canUndo = undoStack.length > 0;
+  const canRedo = redoStack.length > 0;
+
+  // Keyboard: Ctrl/Cmd+Z = undo, Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z = redo, Esc = deselect.
+  // Ignored while typing in a field so text editing keeps its native shortcuts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      if (e.key === 'Escape') {
+        // Deselect any tool outline / layout shape, and drop back to the Select tool.
+        selectOutline(null);
+        selectLayoutShape(null);
+        setLayoutTool('select');
+        return;
+      }
+      if (typing || !(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo, selectOutline, selectLayoutShape, setLayoutTool]);
   const logout = useAuthStore((s) => s.logout);
   const { theme, toggleTheme } = useTheme();
   const [isAccountOpen, setIsAccountOpen] = useState(false);
@@ -263,10 +288,12 @@ export const WorkflowShell: React.FC = () => {
               </button>
             <div className="w-px h-6 bg-border/50" />
             <div className="flex items-center gap-1">
-              <button disabled className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground opacity-40 cursor-not-allowed">
+              <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)"
+                className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition ${canUndo ? 'text-foreground hover:bg-accent hover:text-accent-foreground cursor-pointer' : 'text-muted-foreground opacity-40 cursor-not-allowed'}`}>
                 <Undo2 className="w-4 h-4" />
               </button>
-              <button disabled className="w-8 h-8 flex items-center justify-center rounded-md text-muted-foreground opacity-40 cursor-not-allowed">
+              <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)"
+                className={`w-8 h-8 flex items-center justify-center rounded-md tech-transition ${canRedo ? 'text-foreground hover:bg-accent hover:text-accent-foreground cursor-pointer' : 'text-muted-foreground opacity-40 cursor-not-allowed'}`}>
                 <Redo2 className="w-4 h-4" />
               </button>
             </div>

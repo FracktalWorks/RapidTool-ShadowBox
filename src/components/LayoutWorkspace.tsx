@@ -417,6 +417,7 @@ export const LayoutWorkspace: React.FC = () => {
     updateLayoutShape,
     removeLayoutShape,
     addLayoutShape,
+    setLayoutTool,
     recenterLayoutShapes,
     clearanceValue,
   } = useAppStore();
@@ -659,12 +660,15 @@ export const LayoutWorkspace: React.FC = () => {
     setIsRotating(false);
     setResizeHandle(null);
     setIsPanning(false);
-    // End drawing mode
+    // End drawing mode. After placing a shape, drop back to Select so the shape is
+    // immediately manipulable (its resize/rotate handles render only in select mode)
+    // and a stray next click doesn't spawn another shape.
     if (isDrawing) {
       setIsDrawing(false);
       setDrawingShapeId(null);
+      setLayoutTool('select');
     }
-  }, [isDrawing]);
+  }, [isDrawing, setLayoutTool]);
   
   // Handle canvas mouse down (start drawing or deselect)
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {

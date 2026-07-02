@@ -111,6 +111,13 @@ export interface AppState {
   refineHistory: Record<string, ToolOutline[]>;
   undoRefine: (id: string) => void;
   snapToPill: (id: string) => void;
+
+  // Trace history — undo/redo of the whole tool list (add / remove / auto-detect).
+  // Snapshots the list BEFORE each discrete change; Ctrl+Z / Ctrl+Y + header buttons.
+  undoStack: ToolOutline[][];
+  redoStack: ToolOutline[][];
+  undo: () => void;
+  redo: () => void;
   
   // Clearance/Offset
   clearanceValue: number;
@@ -204,6 +211,8 @@ const initialState = {
   toolOutlines: [],
   selectedOutlineId: null,
   refineHistory: {} as Record<string, ToolOutline[]>,
+  undoStack: [] as ToolOutline[][],
+  redoStack: [] as ToolOutline[][],
   clearanceValue: 1.0, // default Offset preset = Medium (step 3: None 0 / Small 0.5 / Medium 1 / Large 2)
   activeTool: 'box' as const,
   refineBrush: 12,
@@ -308,6 +317,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       toolOutlines: [],
       selectedOutlineId: null,
       refineHistory: {} as Record<string, ToolOutline[]>,
+      undoStack: [],
+      redoStack: [],
     };
   }),
 
@@ -326,6 +337,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       pixelsPerMm: null,
       toolOutlines: [],
       selectedOutlineId: null,
+      undoStack: [],
+      redoStack: [],
       currentStep: 'paper',
     });
   },
@@ -339,12 +352,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   
   setPixelsPerMm: (ppm) => set({ pixelsPerMm: ppm }),
   
-  setToolOutlines: (outlines) => set({
+  setToolOutlines: (outlines) => set((state) => ({
+    undoStack: [...state.undoStack, state.toolOutlines].slice(-50),
+    redoStack: [],
     toolOutlines: outlines,
     selectedOutlineId: outlines.length > 0 ? outlines[0].id : null,
-  }),
-  
+  })),
+
   addToolOutline: (outline) => set((state) => ({
+    undoStack: [...state.undoStack, state.toolOutlines].slice(-50),
+    redoStack: [],
     toolOutlines: [...state.toolOutlines, outline],
     selectedOutlineId: outline.id,
   })),
@@ -438,6 +455,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const areaInMm2 = state.pixelsPerMm ? area / (state.pixelsPerMm * state.pixelsPerMm) : undefined;
     
     return {
+      // Each refine is a discrete click → also snapshot the whole list so global
+      // Ctrl+Z / Redo covers click-and-trace refines, not just add/remove.
+      undoStack: [...state.undoStack, state.toolOutlines].slice(-50),
+      redoStack: [],
       refineHistory,
       toolOutlines: state.toolOutlines.map((o) =>
         o.id === id ? { ...o, points, smoothedPoints, regularizedPoints, boundingBox, area, areaInMm2, samClicks } : o
@@ -459,12 +480,36 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeToolOutline: (id) => set((state) => {
     const { [id]: _drop, ...refineHistory } = state.refineHistory;
     return {
+      undoStack: [...state.undoStack, state.toolOutlines].slice(-50),
+      redoStack: [],
       refineHistory,
       toolOutlines: state.toolOutlines.filter((o) => o.id !== id),
       selectedOutlineId: state.selectedOutlineId === id ? null : state.selectedOutlineId,
     };
   }),
-  
+
+  // Global trace undo/redo — swap the whole list, moving the current one across stacks.
+  undo: () => set((state) => {
+    if (state.undoStack.length === 0) return {} as Partial<typeof state>;
+    const prev = state.undoStack[state.undoStack.length - 1];
+    return {
+      toolOutlines: prev,
+      undoStack: state.undoStack.slice(0, -1),
+      redoStack: [...state.redoStack, state.toolOutlines].slice(-50),
+      selectedOutlineId: null,
+    };
+  }),
+  redo: () => set((state) => {
+    if (state.redoStack.length === 0) return {} as Partial<typeof state>;
+    const next = state.redoStack[state.redoStack.length - 1];
+    return {
+      toolOutlines: next,
+      redoStack: state.redoStack.slice(0, -1),
+      undoStack: [...state.undoStack, state.toolOutlines].slice(-50),
+      selectedOutlineId: null,
+    };
+  }),
+
   selectOutline: (id) => set({ selectedOutlineId: id }),
 
   snapToPill: (id) => set((state) => {
