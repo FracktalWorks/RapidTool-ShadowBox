@@ -1653,39 +1653,6 @@ const DesignStepPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Wall Thickness */}
-        <div className="space-y-2">
-          <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">
-            Wall Thickness
-          </label>
-          <div className="space-y-1.5">
-            <input
-              type="range"
-              min={1}
-              max={5}
-              step={0.5}
-              value={designSettings.wallThickness}
-              onChange={(e) =>
-                updateDesignSettings({
-                  wallThickness: parseFloat(e.target.value),
-                })
-              }
-              className="w-full h-1.5 bg-[hsl(var(--muted))] rounded-lg appearance-none cursor-pointer accent-[hsl(var(--primary))]"
-            />
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                1mm
-              </span>
-              <span className="text-xs font-medium font-tech">
-                {designSettings.wallThickness}mm
-              </span>
-              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                5mm
-              </span>
-            </div>
-          </div>
-        </div>
-
         {/* Chamfer Size */}
         <div className="space-y-2">
           <label className="text-[10px] font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">
@@ -1695,7 +1662,7 @@ const DesignStepPanel: React.FC = () => {
             <input
               type="range"
               min={0}
-              max={5}
+              max={20}
               step={0.5}
               value={designSettings.chamferSize}
               onChange={(e) =>
@@ -1713,7 +1680,7 @@ const DesignStepPanel: React.FC = () => {
                 {designSettings.chamferSize}mm
               </span>
               <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
-                5mm
+                20mm
               </span>
             </div>
           </div>

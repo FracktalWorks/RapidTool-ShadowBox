@@ -120,7 +120,6 @@ export const PropertiesPanel: React.FC = () => {
         <SectionTitle icon={<Box className="w-3.5 h-3.5" />}>Design Summary</SectionTitle>
         <dl className="flex flex-col gap-1.5 text-xs">
           <Row k="Base height" v={`${designSettings.baseHeight} mm`} />
-          <Row k="Wall thickness" v={`${designSettings.wallThickness} mm`} />
           <Row k="Cutout depth" v={`${designSettings.cutoutDepth} mm`} />
           <Row k="Chamfer" v={`${designSettings.chamferSize} mm`} />
           <Row k="Gridfinity base" v={designSettings.gridfinityBase ? 'On' : 'Off'} />
