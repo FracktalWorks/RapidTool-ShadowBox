@@ -20,7 +20,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  FileText, Wrench, LayoutGrid, Box, Download,
+  FileText, Wrench, LayoutGrid, Box, Download, Type,
   RotateCcw, ChevronLeft, ChevronRight, UserCircle2,
   AlertCircle, ArrowRight, X, CheckCircle2, Loader2,
   Undo2, Redo2, HelpCircle, FolderPlus, FolderOpen, Save,
@@ -99,10 +99,22 @@ const stepConfigs: StepConfig[] = [
       'Rotate and zoom the 3D model to inspect wall thickness and edge chamfering'
     ]
   },
-  { 
-    step: 'export', 
-    label: 'Export',           
-    description: 'Save as SVG or 3D STL file', 
+  {
+    step: 'labels',
+    label: 'Labels',
+    description: 'Add embossed text labels',
+    icon: <Type className="w-4 h-4" />,
+    IconComponent: Type,
+    helpText: [
+      'Type your label text (e.g. project name + version) and pick a font',
+      'Set font size and emboss height; position it with the X / Y and rotation fields',
+      'Labels are raised on the tray top and print as part of the STL'
+    ]
+  },
+  {
+    step: 'export',
+    label: 'Export',
+    description: 'Save as SVG or 3D STL file',
     icon: <Download className="w-4 h-4" />, 
     IconComponent: Download,
     helpText: [
@@ -133,8 +145,11 @@ export const WorkflowShell: React.FC = () => {
     paperDetected, toolOutlines, layoutState, resetAll,
     undo, redo, undoStack, redoStack, selectOutline, selectLayoutShape, setLayoutTool,
   } = useAppStore();
-  const canUndo = undoStack.length > 0;
-  const canRedo = redoStack.length > 0;
+  // Undo/redo only tracks click-trace tool outlines, so it's only meaningful on the
+  // Trace step. Gating here stops Ctrl+Z on other steps (e.g. Labels) from silently
+  // reverting the trace.
+  const canUndo = currentStep === 'tools' && undoStack.length > 0;
+  const canRedo = currentStep === 'tools' && redoStack.length > 0;
 
   // Keyboard: Ctrl/Cmd+Z = undo, Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z = redo, Esc = deselect.
   // Ignored while typing in a field so text editing keeps its native shortcuts.
@@ -151,6 +166,10 @@ export const WorkflowShell: React.FC = () => {
       }
       if (typing || !(e.ctrlKey || e.metaKey)) return;
       const k = e.key.toLowerCase();
+      if (k !== 'z' && k !== 'y') return;
+      // Only undo/redo tool outlines on the Trace step — never revert the trace from
+      // another step where Ctrl+Z would be interpreted as "undo my last action".
+      if (useAppStore.getState().currentStep !== 'tools') return;
       if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
       else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
     };
@@ -266,6 +285,7 @@ export const WorkflowShell: React.FC = () => {
     switch (currentStep) {
       case 'layout': return <LayoutWorkspace />;
       case 'design': return <DesignWorkspace />;
+      case 'labels': return <DesignWorkspace />; // reuse the 3D tray view; labels overlay on top
       case 'export': return <ExportWorkspace />;
       default:       return <ImageWorkspace />;
     }
@@ -279,7 +299,7 @@ export const WorkflowShell: React.FC = () => {
       <header className="h-14 flex items-center justify-between px-4 border-b border-border/50 tech-glass">
         {/* Left */}
         <div className="flex items-center gap-4">
-          <RapidToolLogo productName="tooltrace" icon={<Wrench className="w-4 h-4 text-amber-500 flex-shrink-0" />} />
+          <RapidToolLogo productName="Shadow Box" />
           <div className="w-px h-6 bg-border/50" />
             <div className="flex items-center gap-2">
               <button onClick={handleReset} title="Reset session"

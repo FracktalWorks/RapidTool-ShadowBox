@@ -20,6 +20,7 @@ import { offsetPolygon } from '../lib/geometry';
 import { Download, FileCode, Box, RotateCcw, Layers, AlertCircle } from 'lucide-react';
 import { downloadSVG } from '../lib/exportSVG';
 import { useProgress } from '../stores/progressStore';
+import { buildLabelGeometry, trayTopZ, getPositionAxis, LabelsLayer, type LabelConfig } from '../features/labels';
 
 // Extend JSX.IntrinsicElements for R3F
 declare module 'react' {
@@ -358,13 +359,14 @@ export async function buildManifoldStlBlob(mesh: THREE.Mesh): Promise<Blob> {
 /**
  * Generate a combined mesh for STL export
  */
-export function generateExportMesh(
+export async function generateExportMesh(
   layoutState: ReturnType<typeof useAppStore.getState>['layoutState'],
   toolOutlines: ReturnType<typeof useAppStore.getState>['toolOutlines'],
   pixelsPerMm: number | null,
   settings: DesignSettings,
   offsetMm = 0,
-): THREE.Mesh {
+  labels: LabelConfig[] = [],
+): Promise<THREE.Mesh> {
   const { grid, shapes } = layoutState;
   
   const layoutWidth = grid.cols * grid.cellWidthMm;
@@ -445,17 +447,63 @@ export function generateExportMesh(
     geometries.push(lip);
   }
   
-  // Merge geometries using BufferGeometryUtils approach
-  const mergedGeo = mergeBufferGeometries(geometries);
-  
-  // Create mesh with basic material
   const material = new THREE.MeshStandardMaterial({
     color: 0x707070,
     roughness: 0.5,
     metalness: 0.1,
   });
-  
-  return new THREE.Mesh(mergedGeo, material);
+
+  // Embossed text labels — rest each on the ACTUAL tray surface at its X/Y (same as the
+  // live preview) via a downward raycast. Raycast against a throwaway merge of the tray
+  // parts (only to read the surface height); the union below fuses the individual parts.
+  const labelGeometries: THREE.BufferGeometry[] = [];
+  if (labels.length > 0) {
+    const trayForRaycast = mergeBufferGeometries(geometries);
+    const trayMesh = new THREE.Mesh(trayForRaycast);
+    trayMesh.updateMatrixWorld(true);
+    const rc = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const fallbackY = trayTopZ(settings.baseHeight, settings.cutoutDepth);
+    for (const label of labels) {
+      // Footprint x/y (mm from centre) → world after the -90° X rotation: (x, ·, -y).
+      const x = getPositionAxis(label.position, 'x');
+      const y = getPositionAxis(label.position, 'y');
+      rc.set(new THREE.Vector3(x, fallbackY + 500, -y), down);
+      const hits = rc.intersectObject(trayMesh, false);
+      const surfaceY = hits.length > 0 ? hits[0].point.y : fallbackY;
+      const g = await buildLabelGeometry(label, surfaceY);
+      if (g) {
+        g.applyMatrix4(new THREE.Matrix4().makeRotationX(-Math.PI / 2));
+        labelGeometries.push(g);
+      }
+    }
+    trayForRaycast.dispose();
+  }
+
+  // Boolean-UNION every part (base, walls, pocket floor, feet, lip + each label) into a
+  // single watertight manifold. Manifold3D welds coincident vertices and removes the
+  // internal faces where parts touch/interpenetrate — the ONLY way to get a clean,
+  // print-ready solid. (Merging the overlapping parts into one triangle soup is
+  // non-manifold: coincident/self-intersecting faces → slicers choke, repair fails.)
+  const parts = [...geometries, ...labelGeometries];
+  try {
+    const { unionGeometriesWithManifold } = await import('@rapidtool/cad-core');
+    const union = await unionGeometriesWithManifold(parts);
+    // Require EVERY part to convert + fuse — a partial union would drop a wall/floor and
+    // silently emit a holed model. If anything fails, fall back to the raw merge below.
+    if (union.success && union.geometry && union.failedMeshCount === 0) {
+      parts.forEach((g) => g.dispose());
+      return new THREE.Mesh(union.geometry, material);
+    }
+    console.warn(`[export] manifold union incomplete (${union.failedMeshCount}/${parts.length} parts failed); falling back to raw merge:`, union.error);
+  } catch (err) {
+    console.warn('[export] manifold union threw; falling back to raw merge:', err);
+  }
+
+  // Fallback — raw merge of all parts (buildManifoldStlBlob still attempts a repair pass).
+  const merged = mergeBufferGeometries(parts);
+  parts.forEach((g) => g.dispose());
+  return new THREE.Mesh(merged, material);
 }
 
 /**
@@ -553,7 +601,8 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
 }) => {
   const { grid, shapes } = layoutState;
   const meshRef = useRef<THREE.Group>(null);
-  
+  const trayRef = useRef<THREE.Group>(null); // tray meshes only — raycast target for labels
+
   const layoutWidth = grid.cols * grid.cellWidthMm;
   const layoutHeight = grid.rows * grid.cellHeightMm;
   
@@ -659,42 +708,49 @@ const ExportMeshPreview: React.FC<ExportMeshPreviewProps> = ({
   
   return (
     <group ref={meshRef} rotation={[-Math.PI / 2, 0, 0]}>
-      {/* Solid base plate (bottom - always solid) */}
-      <mesh geometry={basePlateGeometry} material={basePlateMaterial} />
+      {/* Tray meshes only — the raycast target for label surface-snapping */}
+      <group ref={trayRef}>
+        {/* Solid base plate (bottom - always solid) */}
+        <mesh geometry={basePlateGeometry} material={basePlateMaterial} />
 
-      {/* Walls with inner pocket - sits on top of base plate */}
-      <mesh 
-        geometry={wallsGeometry} 
-        material={holderMaterial}
-        position={[0, 0, settings.baseHeight]}
-      />
-
-      {/* Raised floor inside pocket with tool cutout holes */}
-      {pocketFloorGeometry && (
-        <mesh 
-          geometry={pocketFloorGeometry} 
+        {/* Walls with inner pocket - sits on top of base plate */}
+        <mesh
+          geometry={wallsGeometry}
           material={holderMaterial}
           position={[0, 0, settings.baseHeight]}
         />
-      )}
 
-      {/* Gridfinity interlocking feet - stair-step profile, hangs below base plate */}
-      {feetGeometry && (
-        <mesh
-          geometry={feetGeometry}
-          material={gridfinityMaterial}
-          position={[0, 0, 0]}
-        />
-      )}
+        {/* Raised floor inside pocket with tool cutout holes */}
+        {pocketFloorGeometry && (
+          <mesh
+            geometry={pocketFloorGeometry}
+            material={holderMaterial}
+            position={[0, 0, settings.baseHeight]}
+          />
+        )}
 
-      {/* Gridfinity stacking lip - chamfered rim on the top of the walls */}
-      {lipGeometry && (
-        <mesh
-          geometry={lipGeometry}
-          material={holderMaterial}
-          position={[0, 0, settings.baseHeight + settings.cutoutDepth]}
-        />
-      )}
+        {/* Gridfinity interlocking feet - stair-step profile, hangs below base plate */}
+        {feetGeometry && (
+          <mesh
+            geometry={feetGeometry}
+            material={gridfinityMaterial}
+            position={[0, 0, 0]}
+          />
+        )}
+
+        {/* Gridfinity stacking lip - chamfered rim on the top of the walls */}
+        {lipGeometry && (
+          <mesh
+            geometry={lipGeometry}
+            material={holderMaterial}
+            position={[0, 0, settings.baseHeight + settings.cutoutDepth]}
+          />
+        )}
+      </group>
+
+      {/* Embossed text labels — same surface-snap as the Design step, so the preview
+          matches what the STL exports. */}
+      <LabelsLayer trayRef={trayRef} />
     </group>
   );
 };
@@ -723,7 +779,35 @@ const Scene3D: React.FC<Scene3DProps> = ({ layoutState, toolOutlines, pixelsPerM
       camera.lookAt(0, 0, 0);
     }
   }, [camera, maxDim]);
-  
+
+  // Snap the camera to a named orientation. Driven by the header view buttons — both
+  // dispatch 'viewer-orientation'; 'viewer-reset' re-centres. (Same as DesignWorkspace,
+  // so the view cube works on the Export step too.)
+  useEffect(() => {
+    const dist = Math.max(maxDim, 1) * 1.6;
+    const dirs: Record<string, [number, number, number]> = {
+      front: [0, 0, 1], back: [0, 0, -1], right: [1, 0, 0], left: [-1, 0, 0],
+      top: [0, 1, 0], bottom: [0, -1, 0],
+      iso: [1, 0.85, 1], isometric: [1, 0.85, 1],
+    };
+    const applyOrientation = (o: string) => {
+      const d = dirs[o] ?? dirs.iso;
+      const v = new THREE.Vector3(d[0], d[1], d[2]).normalize().multiplyScalar(dist);
+      camera.position.set(v.x, v.y, v.z);
+      camera.lookAt(0, 0, 0);
+      const c = controlsRef.current;
+      if (c) { c.target.set(0, 0, 0); c.update(); }
+    };
+    const onOrient = (e: Event) => applyOrientation((e as CustomEvent<string>).detail);
+    const onReset = () => controlsRef.current?.reset?.();
+    window.addEventListener('viewer-orientation', onOrient as EventListener);
+    window.addEventListener('viewer-reset', onReset);
+    return () => {
+      window.removeEventListener('viewer-orientation', onOrient as EventListener);
+      window.removeEventListener('viewer-reset', onReset);
+    };
+  }, [camera, maxDim]);
+
   // Expose controls to parent when mounted
   const handleControlsRef = (controls: any) => {
     controlsRef.current = controls;
@@ -921,6 +1005,7 @@ export const ExportWorkspace: React.FC = () => {
     designSettings,
     pixelsPerMm,
     clearanceValue,
+    labels,
     setProcessing,
   } = useAppStore();
   
@@ -943,7 +1028,11 @@ export const ExportWorkspace: React.FC = () => {
     }
 
     setProcessing(true, `Exporting ${exportFormat.toUpperCase()}...`);
-    
+
+    // Once the browser has been handed the file, the export has succeeded — any
+    // later hiccup (geometry disposal, revokeObjectURL) must NOT be reported as a
+    // failure to the user, or they get a scary toast on top of a good download.
+    let delivered = false;
     try {
       if (exportFormat === 'svg') {
         // Export SVG using tool outlines
@@ -953,12 +1042,13 @@ export const ExportWorkspace: React.FC = () => {
           points: outline.regularizedPoints ?? outline.smoothedPoints,
           color: outline.color,
         }));
-        
+
         downloadSVG(outlinesToExport, pixelsPerMm, 'tooltrace-export.svg');
+        delivered = true;
       } else {
         // Export a watertight, manifold STL (repaired via Manifold3D).
         useProgress.getState().start('Building 3D model…', 6000);
-        const mesh = generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings, clearanceValue);
+        const mesh = await generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings, clearanceValue, labels);
         const blob = await buildManifoldStlBlob(mesh);
 
         const url = URL.createObjectURL(blob);
@@ -967,25 +1057,30 @@ export const ExportWorkspace: React.FC = () => {
         link.download = 'tooltrace-export.stl';
         document.body.appendChild(link);
         link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        delivered = true; // file is downloading from here on
 
-        // Clean up
-        mesh.geometry.dispose();
-        if (mesh.material instanceof THREE.Material) {
-          mesh.material.dispose();
+        // Best-effort teardown — isolated so a disposal error can't fail the export.
+        try {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          mesh.geometry.dispose();
+          if (mesh.material instanceof THREE.Material) mesh.material.dispose();
+        } catch (cleanupErr) {
+          console.warn('Post-export cleanup failed (file already downloaded):', cleanupErr);
         }
       }
     } catch (error) {
       // Keep the technical detail in the console; show the user a calm message.
       console.error('Export failed:', error);
-      setExportError("Couldn't export your design. Please try again.");
-      setTimeout(() => setExportError(null), 6000);
+      if (!delivered) {
+        setExportError("Couldn't export your design. Please try again.");
+        setTimeout(() => setExportError(null), 6000);
+      }
     } finally {
       setProcessing(false);
       useProgress.getState().done();
     }
-  }, [exportFormat, toolOutlines, layoutState, designSettings, pixelsPerMm, clearanceValue, setProcessing]);
+  }, [exportFormat, toolOutlines, layoutState, designSettings, pixelsPerMm, clearanceValue, labels, setProcessing]);
   
   // Calculate dimensions for display
   const layoutWidth = layoutState.grid.cols * layoutState.grid.cellWidthMm;

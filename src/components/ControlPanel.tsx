@@ -39,6 +39,7 @@ import { detectPaper, rectifyToA4, getImageData } from "../workers";
 import { downloadSVG } from "../lib/exportSVG";
 import { offsetPolygon } from "../lib/geometry";
 import { useProgress } from "../stores/progressStore";
+import { LabelsStepPanel } from "./LabelsStepPanel";
 
 // ============================================================================
 // Paper Detection Step Panel (includes image upload)
@@ -989,6 +990,7 @@ const ExportStepPanel: React.FC = () => {
     clearanceValue,
     layoutState,
     designSettings,
+    labels,
   } = useAppStore();
 
   // Check prerequisites
@@ -1031,8 +1033,9 @@ const ExportStepPanel: React.FC = () => {
         const { generateExportMesh, buildManifoldStlBlob } = await import("./ExportWorkspace");
         const THREE = await import("three");
 
-        // Apply clearance via the mesh generator (offsetMm) for parity with the preview.
-        const mesh = generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings, clearanceValue);
+        // generateExportMesh is async (fonts + manifold union) — MUST await it, and pass
+        // the labels so they're embossed + boolean-unioned into the watertight STL.
+        const mesh = await generateExportMesh(layoutState, toolOutlines, pixelsPerMm, designSettings, clearanceValue, labels);
         const blob = await buildManifoldStlBlob(mesh);
 
         const url = URL.createObjectURL(blob);
@@ -1767,7 +1770,7 @@ const DesignStepPanel: React.FC = () => {
         </div>
 
         <button
-          onClick={() => setCurrentStep("export")}
+          onClick={() => setCurrentStep("labels")}
           disabled={shapes.length === 0}
           className="
             w-full h-9 px-3
@@ -1800,6 +1803,7 @@ export const ControlPanel: React.FC = () => {
         {currentStep === "tools" && <ToolsStepPanel />}
         {currentStep === "layout" && <LayoutStepPanel />}
         {currentStep === "design" && <DesignStepPanel />}
+        {currentStep === "labels" && <LabelsStepPanel />}
         {currentStep === "export" && <ExportStepPanel />}
       </div>
     </div>

@@ -6,15 +6,17 @@ import { create } from 'zustand';
 import type { Point2D, PaperCorners, BoundingBox, ToolOutline } from '../lib/geometry';
 import { createOrientedPillShape, polygonArea, getBoundingBox, smoothContour } from '../lib/geometry';
 import { regularizeContour } from '../lib/contourRegularizer';
+import type { LabelConfig } from '../features/labels/types';
 
 // Re-export types
 export type { Point2D, PaperCorners, BoundingBox, ToolOutline };
+export type { LabelConfig };
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type WorkflowStep = 'paper' | 'tools' | 'layout' | 'design' | 'export';
+export type WorkflowStep = 'paper' | 'tools' | 'layout' | 'design' | 'labels' | 'export';
 
 // Layout-related types
 export type LayoutShapeType = 'tool' | 'finger-notch' | 'circle' | 'square' | 'rectangle';
@@ -118,6 +120,14 @@ export interface AppState {
   redoStack: ToolOutline[][];
   undo: () => void;
   redo: () => void;
+
+  // Labels — embossed 3D text placed on the tray (Labels workflow step).
+  labels: LabelConfig[];
+  selectedLabelId: string | null;
+  addLabel: (label: LabelConfig) => void;
+  updateLabel: (id: string, updates: Partial<LabelConfig>) => void;
+  removeLabel: (id: string) => void;
+  selectLabel: (id: string | null) => void;
   
   // Clearance/Offset
   clearanceValue: number;
@@ -213,6 +223,8 @@ const initialState = {
   refineHistory: {} as Record<string, ToolOutline[]>,
   undoStack: [] as ToolOutline[][],
   redoStack: [] as ToolOutline[][],
+  labels: [] as LabelConfig[],
+  selectedLabelId: null as string | null,
   clearanceValue: 1.0, // default Offset preset = Medium (step 3: None 0 / Small 0.5 / Medium 1 / Large 2)
   activeTool: 'box' as const,
   refineBrush: 12,
@@ -319,6 +331,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       refineHistory: {} as Record<string, ToolOutline[]>,
       undoStack: [],
       redoStack: [],
+      labels: [],
+      selectedLabelId: null,
     };
   }),
 
@@ -339,6 +353,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedOutlineId: null,
       undoStack: [],
       redoStack: [],
+      labels: [],
+      selectedLabelId: null,
       currentStep: 'paper',
     });
   },
@@ -511,6 +527,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   }),
 
   selectOutline: (id) => set({ selectedOutlineId: id }),
+
+  // ── Labels ────────────────────────────────────────────────────────────────
+  addLabel: (label) => set((state) => ({
+    labels: [...state.labels, label],
+    selectedLabelId: label.id,
+  })),
+  updateLabel: (id, updates) => set((state) => ({
+    labels: state.labels.map((l) => (l.id === id ? { ...l, ...updates } : l)),
+  })),
+  removeLabel: (id) => set((state) => ({
+    labels: state.labels.filter((l) => l.id !== id),
+    selectedLabelId: state.selectedLabelId === id ? null : state.selectedLabelId,
+  })),
+  selectLabel: (id) => set({ selectedLabelId: id }),
 
   snapToPill: (id) => set((state) => {
     const outline = state.toolOutlines.find(o => o.id === id);

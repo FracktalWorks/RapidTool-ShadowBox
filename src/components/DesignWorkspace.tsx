@@ -24,6 +24,7 @@ import { useAppStore, type LayoutShape, type DesignSettings } from '../stores';
 import { useTheme } from '../hooks';
 import { createGridfinityFeet, createGridfinityLip, unitsFor } from '../lib/gridfinityGeometry';
 import { offsetPolygon } from '../lib/geometry';
+import { LabelsLayer } from '../features/labels';
 
 // Extend JSX.IntrinsicElements for R3F
 declare module 'react' {
@@ -450,6 +451,7 @@ const ToolHolderMesh: React.FC<ToolHolderMeshProps> = ({
   const { grid, shapes } = layoutState;
   const clearanceValue = useAppStore((s) => s.clearanceValue);
   const meshRef = useRef<THREE.Group>(null);
+  const trayRef = useRef<THREE.Group>(null); // tray meshes only — raycast target for labels
 
   // Calculate layout dimensions in mm
   const layoutWidth = grid.cols * grid.cellWidthMm;
@@ -598,6 +600,8 @@ const ToolHolderMesh: React.FC<ToolHolderMeshProps> = ({
 
   return (
     <group ref={meshRef} rotation={[-Math.PI / 2, 0, 0]}>
+      {/* Tray meshes only — the raycast target for label surface-snapping */}
+      <group ref={trayRef}>
       {/* Solid base plate (bottom - always solid) */}
       <mesh geometry={basePlateGeometry} material={basePlateMaterial} />
 
@@ -634,6 +638,11 @@ const ToolHolderMesh: React.FC<ToolHolderMeshProps> = ({
           position={[0, 0, settings.baseHeight + settings.cutoutDepth]}
         />
       )}
+
+      </group>
+
+      {/* Embossed text labels — rest on the tray surface (raycast against trayRef) */}
+      <LabelsLayer trayRef={trayRef} />
     </group>
   );
 };
