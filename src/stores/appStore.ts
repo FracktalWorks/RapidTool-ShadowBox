@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import type { Point2D, PaperCorners, BoundingBox, ToolOutline } from '../lib/geometry';
 import { createOrientedPillShape, polygonArea, getBoundingBox, smoothContour } from '../lib/geometry';
 import { regularizeContour } from '../lib/contourRegularizer';
+import { packRects } from '../lib/packRects';
 import type { LabelConfig } from '../features/labels/types';
 
 // Re-export types
@@ -650,32 +651,40 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     });
 
-    // 2. AUTO-SIZE the grid to actually CONTAIN the tools (stacked vertically),
-    //    so long tools are never clipped. Grid grows in whole 42 mm cells.
-    const stackH = dims.reduce((s, d) => s + d.h, 0) + GAP * (dims.length - 1);
-    const neededW = Math.max(...dims.map((d) => d.w)) + MARGIN * 2;
-    const neededH = stackH + MARGIN * 2;
-    const cols = Math.max(1, Math.ceil(neededW / cell));
-    const rows = Math.max(1, Math.ceil(neededH / cell));
+    // 2. 2D SKYLINE-PACK the tools into a compact landscape block (short tools nest
+    //    beside long ones — a shelf/column can't do that), so the tray looks like a
+    //    real shadow board instead of a tall sliver grid. Target bin width aims for a
+    //    ~3:2 landscape and never narrower than the widest tool.
+    const items = dims.map((d) => ({ w: d.w, h: d.h, ref: d }));
+    const maxToolW = Math.max(...items.map((it) => it.w));
+    const packArea = items.reduce((s, it) => s + (it.w + GAP) * (it.h + GAP), 0);
+    const binW = Math.max(maxToolW + GAP, Math.sqrt(packArea * 1.5));
+    const packed = packRects(items, binW, GAP);
+    const contentW = packed.width;
+    const contentH = packed.height;
+
+    // Size the grid to contain the packed block + margin, in whole 42 mm cells.
+    const cols = Math.max(1, Math.ceil((contentW + MARGIN * 2) / cell));
+    const rows = Math.max(1, Math.ceil((contentH + MARGIN * 2) / cell));
     const layoutW = cols * cell;
     const layoutH = rows * cell;
 
-    // 3. Place tools: vertical centred stack, each horizontally centred.
-    let y = (layoutH - stackH) / 2;
-    const shapes: LayoutShape[] = dims.map((d) => {
-      const shape: LayoutShape = {
+    // 3. Centre the packed block within the grid.
+    const offX = (layoutW - contentW) / 2;
+    const offY = (layoutH - contentH) / 2;
+    const shapes: LayoutShape[] = packed.placements.map(({ x, y, item }) => {
+      const d = item.ref;
+      return {
         id: `layout-${d.outline.id}`,
-        type: 'tool',
-        x: (layoutW - d.w) / 2,
-        y,
+        type: 'tool' as const,
+        x: offX + x,
+        y: offY + y,
         width: d.w,
         height: d.h,
         rotation: 0,
         toolOutlineId: d.outline.id,
         color: d.outline.color,
       };
-      y += d.h + GAP;
-      return shape;
     });
 
     set({

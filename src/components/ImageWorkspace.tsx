@@ -603,16 +603,20 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
 
     try {
       if (activeTool === 'refine') {
-        // Refinement of an existing tool
-        if (selectedOutlineId) {
-          const outline = toolOutlines.find(o => o.id === selectedOutlineId);
-          if (outline) {
-            const currentClicks = outline.samClicks ? [...outline.samClicks] : [];
-            currentClicks.push({ x: point.x, y: point.y, label });
-            const existing = outline.smoothedPoints && outline.smoothedPoints.length >= 3 ? outline.smoothedPoints : outline.points;
-            const merged = label === 1 ? await addRegionAtClick(existing, currentClicks) : await removeWithClicks(existing, currentClicks);
-            updateToolOutlineRefined(selectedOutlineId, merged, currentClicks);
-          }
+        // Refine the tool the click lands INSIDE; otherwise fall back to the selected
+        // tool (so a click on empty paper still adds a negative/carve point to it).
+        // This lets you switch which tool you're refining just by clicking into it,
+        // instead of every refine click going to whichever tool was selected first.
+        const inside = toolOutlines.find(o =>
+          pointInPolygon(point, o.smoothedPoints && o.smoothedPoints.length >= 3 ? o.smoothedPoints : o.points));
+        const target = inside ?? toolOutlines.find(o => o.id === selectedOutlineId);
+        if (target) {
+          if (target.id !== selectedOutlineId) selectOutline(target.id);
+          const currentClicks = target.samClicks ? [...target.samClicks] : [];
+          currentClicks.push({ x: point.x, y: point.y, label });
+          const existing = target.smoothedPoints && target.smoothedPoints.length >= 3 ? target.smoothedPoints : target.points;
+          const merged = label === 1 ? await addRegionAtClick(existing, currentClicks) : await removeWithClicks(existing, currentClicks);
+          updateToolOutlineRefined(target.id, merged, currentClicks);
         }
       } else {
         // Did the click land INSIDE an existing tool? If so, refine THAT tool
@@ -639,7 +643,11 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
           }
           if (best && best.boundingBox) {
             const b = best.boundingBox;
-            const reach = Math.max(150, 0.25 * Math.hypot(b.maxX - b.minX, b.maxY - b.minY));
+            // TIGHT reach: only clicks essentially touching a tool's edge attach to it
+            // (recovers an SOD-missed jaw). A big 150px floor made every click in a
+            // densely-packed photo get absorbed into the nearest existing tool, so you
+            // could never trace a second tool — it "stuck" to the first one.
+            const reach = Math.min(35, 0.08 * Math.hypot(b.maxX - b.minX, b.maxY - b.minY));
             if (bestD <= reach) hit = best;
           }
         }

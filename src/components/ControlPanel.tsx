@@ -1244,13 +1244,13 @@ const LayoutStepPanel: React.FC = () => {
               <input
                 type="number"
                 min={1}
-                max={10}
+                max={20}
                 value={grid.cols}
                 onChange={(e) =>
                   setLayoutGrid({
                     cols: Math.max(
                       1,
-                      Math.min(10, parseInt(e.target.value) || 1),
+                      Math.min(20, parseInt(e.target.value) || 1),
                     ),
                   })
                 }
@@ -1264,13 +1264,13 @@ const LayoutStepPanel: React.FC = () => {
               <input
                 type="number"
                 min={1}
-                max={10}
+                max={20}
                 value={grid.rows}
                 onChange={(e) =>
                   setLayoutGrid({
                     rows: Math.max(
                       1,
-                      Math.min(10, parseInt(e.target.value) || 1),
+                      Math.min(20, parseInt(e.target.value) || 1),
                     ),
                   })
                 }
