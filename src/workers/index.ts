@@ -31,5 +31,6 @@ export {
 export {
   sodDetect,
   sodPreload,
+  warmupTracer,
   type SodProgress,
 } from './sodWorkerManager';

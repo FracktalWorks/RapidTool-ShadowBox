@@ -1,0 +1,26 @@
+name: Keep BiRefNet tracer warm
+
+# Per Hugging Face's own docs (Spaces > GPU/hardware > "Set a custom sleep time"):
+# "If your Space runs on the default cpu-basic hardware, it will go to sleep if
+# inactive for more than a set time (currently, 48 hours)." That threshold is
+# fixed for free hardware — it's only configurable after upgrading to paid
+# hardware, so there's no dashboard setting to shorten/lengthen it.
+#
+# So this only needs to land ONE request well within every 48h window to keep the
+# Space from ever sleeping. Every 6 hours gives an ~8x safety margin (a missed run
+# or two is harmless) at ~4 runs/day — a fraction of a GitHub Actions private-repo
+# free-tier budget. (An earlier draft of this file pinged every 20 minutes, which
+# would have burned ~2000+ Actions minutes/month for no real benefit over this.)
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # every 6 hours — 48h sleep threshold ÷ 6h ≈ 8x margin
+  workflow_dispatch: {}      # manual "Run workflow" button, e.g. to wake it right now
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping tracer /health
+        run: |
+          curl -sS --max-time 60 -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
+            "https://pavanhgfcid-tooltrace-tracer.hf.space/health" || true

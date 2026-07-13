@@ -83,13 +83,28 @@ async function backendSegment(crop: Uint8ClampedArray, cw: number, ch: number): 
   const headers: Record<string, string> = { 'Content-Type': 'image/png' };
   if (TRACER_KEY) headers['X-Trace-Key'] = TRACER_KEY;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
-  let resp: Response;
-  try {
-    resp = await fetch(`${TRACER_URL}/trace`, { method: 'POST', body: blob, headers, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+  // Blob bodies are re-usable across fetch calls (unlike a stream), so the same
+  // blob can be POSTed again on retry without re-encoding the crop.
+  const postOnce = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS);
+    try {
+      return await fetch(`${TRACER_URL}/trace`, { method: 'POST', body: blob, headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  let resp = await postOnce();
+  // 503 = the Space woke but BiRefNet is still loading ("model not ready"); 401 can
+  // also appear from HF's own gateway during that same spin-up window before the
+  // container is fully up (observed: the very next request a few seconds later
+  // succeeds). Retry once after a short wait instead of immediately falling back
+  // to the weaker in-browser tracer for a Space that's simply still waking.
+  if (resp.status === 503 || resp.status === 401) {
+    logger.warn(`Tracer HTTP ${resp.status} — Space may still be waking, retrying once…`);
+    await new Promise((r) => setTimeout(r, 4000));
+    resp = await postOnce();
   }
   if (!resp.ok) throw new Error(`tracer HTTP ${resp.status}`);
   logger.info(`BiRefNet tracer · ${resp.headers.get('x-trace-ms') || '?'}ms`);
@@ -161,6 +176,19 @@ function cropToPaper(img: ImageData, corners?: PaperCorners) {
 export async function sodPreload(onProgress?: (p: SodProgress) => void): Promise<void> {
   if (TRACER_URL) { onProgress?.({ status: 'backend_tracer', device: 'backend' }); return; }
   await request('load', {}, [], onProgress);
+}
+
+/**
+ * Fire-and-forget wake-up ping for the backend tracer, hitting its unauthenticated
+ * `/health` route. Call once on app load: if a free-tier HF Space has gone to sleep
+ * from inactivity, this eats the ~30–40s cold start (model download/load/warmup)
+ * in the background while the user is still uploading/calibrating the paper photo,
+ * instead of at the moment they actually click to trace. Never throws — a failed
+ * ping just means segmentCrop()'s own retry/fallback handles it when tracing starts.
+ */
+export function warmupTracer(): void {
+  if (!TRACER_URL) return;
+  fetch(`${TRACER_URL}/health`).catch(() => { /* best-effort only */ });
 }
 
 // ── DEBUG: dump the real SOD mask + crop, so the shadow/jaggy finalizer can be
