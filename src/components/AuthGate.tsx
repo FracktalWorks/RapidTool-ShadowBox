@@ -2,16 +2,19 @@
  * AuthGate — RapidTool cross-tool SSO entry guard.
  *
  * On mount it validates the shared .appliedadditive.com session cookie via
- * `fetchCurrentUser()`. While checking → splash. If no session → bounce to the
- * Portal login with a return URL (single sign-on point). When VITE_DISABLE_AUTH
- * is true (local dev) it's a transparent pass-through using a mock user.
+ * `fetchCurrentUser()`. While checking → splash. If no session → redirect to
+ * Portal's canonical sign-in (Portal owns account creation for the whole
+ * suite — see RapidTool-Portal's `/auth/login`/`/auth/register`), carrying a
+ * `returnTo` back to this app so Portal sends the user right back here after
+ * signing in. When VITE_DISABLE_AUTH is true (local dev) it's a transparent
+ * pass-through using a mock user.
  */
 import { useEffect, type ReactNode } from 'react';
 import { LoadingOverlay } from '@rapidtool/cad-ui';
 import { useAuthStore } from '../stores/authStore';
-import { LoginPage } from './LoginPage';
 
 const AUTH_DISABLED = import.meta.env.VITE_DISABLE_AUTH === 'true';
+const PORTAL_URL = import.meta.env.VITE_PORTAL_URL || 'https://portal.appliedadditive.com';
 
 function FullScreenLoader({ message }: { message: string }) {
   return (
@@ -28,14 +31,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
     fetchCurrentUser();
   }, [fetchCurrentUser]);
 
+  useEffect(() => {
+    if (AUTH_DISABLED || isLoading || isAuthenticated) return;
+    const returnTo = encodeURIComponent(window.location.href);
+    window.location.replace(`${PORTAL_URL}/auth/login?returnTo=${returnTo}`);
+  }, [isLoading, isAuthenticated]);
+
   if (AUTH_DISABLED) return <>{children}</>;
 
-  if (isLoading) return <FullScreenLoader message="Checking your session…" />;
-
-  // No shared session → show our own sign-in (which also offers the Portal hop).
-  // If the user is already logged into Portal/Fixture, fetchCurrentUser above will
-  // have authenticated them via the shared cookie and we never reach here.
-  if (!isAuthenticated) return <LoginPage />;
+  if (isLoading || !isAuthenticated) return <FullScreenLoader message="Redirecting to sign in…" />;
 
   return <>{children}</>;
 }
